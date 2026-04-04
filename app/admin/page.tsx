@@ -1,5 +1,7 @@
 'use client'
 
+export const dynamic = 'force-dynamic'
+
 import { useEffect, useState } from 'react'
 import { supabase, getAdminLeaderboard, getPendingAlerts, resolveAlert, createMazeSession, addPlayerPoints, createPlayer, suggestPlayerName, LeaderboardEntry, PointAlert, MazeType } from '@/lib/supabase'
 import { parseMazeReport, calcPointShare, runOCR } from '@/lib/ocr'
