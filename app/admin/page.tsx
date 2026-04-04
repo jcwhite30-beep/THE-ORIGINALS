@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { useEffect, useState, useRef } from 'react'
 import {
   supabase, getAdminLeaderboard, getAllPlayers, getPendingAlerts,
-  getClaims, approveClaim, createClaim, resolveAlert, createMazeSession,
+  getClaims, approveClaim, processClaim, resolveAlert, createMazeSession,
   addPlayerPoints, createPlayer, updatePlayer, suggestPlayerName,
   LeaderboardEntry, Player, PointAlert, Claim, MazeType
 } from '@/lib/supabase'
@@ -165,7 +165,7 @@ function ClaimsTab({showToast}:{showToast:(t:TT)=>void}) {
   async function handleCreate() {
     if(!selPlayer){showToast({msg:'Selecciona un jugador',type:'warn'});return}
     setBusy(true)
-    try{await createClaim(selPlayer,note);showToast({msg:'Claim registrado',type:'ok'});setSelPlayer('');setNote('');load()}
+    try{await processClaim(selPlayer,note);showToast({msg:'Claim registrado',type:'ok'});setSelPlayer('');setNote('');load()}
     catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
     finally{setBusy(false)}
   }
