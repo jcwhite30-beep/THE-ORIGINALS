@@ -116,8 +116,7 @@ export async function createMazeSession(s: Omit<MazeSession, 'id' | 'participant
 export async function addPlayerPoints(playerId: string, sessionId: string, points: number) {
   const { error } = await supabase.from('player_points').upsert({ player_id: playerId, session_id: sessionId, points })
   if (error) throw error
-  // Also update available_pts and total_score on the player
-  await supabase.rpc('update_player_points', { p_player_id: playerId, p_add: points }).catch(()=>{})
+  // available_pts se actualiza via migration_v3 directamente en la DB
 }
 export async function resolveAlert(alertId: string, action: string, playerName?: string) {
   await supabase.from('point_alerts').update({ resolved: true }).eq('id', alertId)
