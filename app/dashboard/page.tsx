@@ -426,8 +426,8 @@ export default function DashboardPage() {
   const EVENTS_AVAIL = 148.41          // puntos disponibles guild events
 
   async function loadData() {
-    const [l, e] = await Promise.all([getPublicLeaderboard(), getGuildEvents()])
-    setLb(l); setEvents(e)
+    const l = await getPublicLeaderboard()
+    setLb(l)
     // FV totals per rune
     const {data: fvRows} = await supabase.from('fv_rune_points').select('*')
     const totals: Record<string,{avail:number;claims:number}> = {}
