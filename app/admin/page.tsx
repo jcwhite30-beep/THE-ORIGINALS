@@ -99,7 +99,7 @@ function StatMini({icon,label,val,col}:{icon:string;label:string;val:string|numb
 // ══════════════════════════════════════════════════════════════
 // ─── RANKING TAB ──────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════
-function RankingTab({showToast}:{showToast:(t:TT)=>void}){
+function RankingTab({showToast,isSuperAdmin}:{showToast:(t:TT)=>void;isSuperAdmin:boolean}){
   const [lb,setLb]=useState<LeaderboardEntry[]>([])
   const [fvData,setFvData]=useState<Record<string,any>>({})
   const [loading,setLoading]=useState(true)
@@ -184,27 +184,29 @@ function RankingTab({showToast}:{showToast:(t:TT)=>void}){
                   <th style={thStyle('Jugador','left')}>Jugador / PJs</th>
                   <th style={thStyle('Total')}>Total Score</th>
                   <th style={thStyle('Disp')}>Pts Disp.</th>
-                  <th style={thStyle('Admin','')} >Admin ★</th>
+                  <th style={thStyle('Admin','')}>Admin ★</th>
                   <th style={thStyle('Claims')}>Claims Disp.</th>
                   <th style={thStyle('Hechos')}>Claims Hechos</th>
-                  <th style={thStyle('Edit','center')}>Editar</th>
+                  {isSuperAdmin&&<th style={thStyle('Edit','center')}>Editar</th>}
                 </tr>
               </thead>
               <tbody>
-                {/* Admin row */}
+                {/* Admin row — solo cuando NO hay búsqueda activa */}
+                {!search.trim()&&(
                 <tr style={{borderBottom:'1px solid #1a0a0a',background:'#120805'}}>
                   <td style={{padding:'9px 10px',textAlign:'center',color:'#c9a84c',fontSize:12}}>★</td>
                   <td style={{padding:'9px 10px'}}>
                     <div style={{fontFamily:'Cinzel,serif',fontWeight:600,color:G,fontSize:13}}>Administrador</div>
-                    <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#666'}}>Puntos de administración</div>
+                    <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#666'}}>Puntos de administración (privado)</div>
                   </td>
                   {tdN(f2(adminTotal),'#aaa',13)}
                   {tdN(f2(adminAvail),'#e05050',14)}
                   {tdN(f2(adminAvail),G,14)}
                   {tdN(fi(adminAvail/5),G,15)}
                   {tdN(0,'#40d0a0',13)}
-                  <td style={{padding:'9px 10px',textAlign:'center'}}><span style={{color:'#444',fontSize:11}}>—</span></td>
+                  {isSuperAdmin&&<td style={{padding:'9px 10px',textAlign:'center'}}><span style={{color:'#444',fontSize:11}}>—</span></td>}
                 </tr>
+                )}
                 {loading?Array.from({length:5}).map((_,i)=>(
                   <tr key={i} style={{borderBottom:'1px solid #120808'}}>
                     {[30,160,80,80,70,70,70,40].map((w,j)=><td key={j} style={{padding:'9px 10px'}}><Sk w={w}/></td>)}
@@ -213,7 +215,7 @@ function RankingTab({showToast}:{showToast:(t:TT)=>void}){
                   <tr key={p.id} style={{borderBottom:'1px solid #120808'}}>
                     <td style={{padding:'9px 10px',textAlign:'center',fontFamily:'Cinzel,serif',color:'#555',fontSize:11}}>{i<3?['🥇','🥈','🥉'][i]:i+1}</td>
                     <td style={{padding:'9px 10px',minWidth:140}}>
-                      {editing===p.id?(
+                      {editing===p.id&&isSuperAdmin?(
                         <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
                           <input value={editPts.avail} onChange={e=>setEditPts(d=>({...d,avail:e.target.value}))} placeholder={f2(p.available_points)}
                             style={{width:80,background:DEEP,border:`1px solid ${G}`,borderRadius:4,padding:'4px 6px',color:'#e8e0d0',fontSize:12,fontFamily:'Rajdhani,sans-serif'}}/>
@@ -232,9 +234,9 @@ function RankingTab({showToast}:{showToast:(t:TT)=>void}){
                     {tdN(f2((p as any).admin_points_total??0),G,13)}
                     {tdN(fi(p.available_points/5),G,15)}
                     {tdN(p.total_claims,'#40d0a0',13)}
-                    <td style={{padding:'9px 10px',textAlign:'center'}}>
+                    {isSuperAdmin&&<td style={{padding:'9px 10px',textAlign:'center'}}>
                       <Btn onClick={()=>{setEditing(p.id);setEditPts({total:f2(p.total_points),avail:f2(p.available_points)})}} size='sm'>✏</Btn>
-                    </td>
+                    </td>}
                   </tr>
                 ))}
               </tbody>
@@ -258,7 +260,7 @@ function RankingTab({showToast}:{showToast:(t:TT)=>void}){
                   {FV_RUNES.map(r=>(
                     <th key={r.key} colSpan={2} style={{padding:'7px 5px',textAlign:'center',fontFamily:'Cinzel,serif',fontSize:7.5,color:r.color,borderLeft:'1px solid #1a2a3a',textTransform:'uppercase',letterSpacing:'0.06em'}}>{r.label}</th>
                   ))}
-                  <th style={{padding:'7px 5px',textAlign:'center',fontFamily:'Cinzel,serif',fontSize:7.5,color:'#888',borderLeft:'1px solid #1a2a3a'}}>Edit</th>
+                  {isSuperAdmin&&<th style={{padding:'7px 5px',textAlign:'center',fontFamily:'Cinzel,serif',fontSize:7.5,color:'#888',borderLeft:'1px solid #1a2a3a'}}>Edit</th>}
                 </tr>
                 <tr style={{borderBottom:'1px solid #0a1414',background:'#060c0e'}}>
                   <th/>
@@ -288,9 +290,10 @@ function RankingTab({showToast}:{showToast:(t:TT)=>void}){
                           {fv?.[`${r.key}_claims`]??0}
                         </td></>
                       ))}
-                      <td style={{padding:'8px 5px',textAlign:'center',borderLeft:'1px solid #1a2a3a'}}>
+                      {isSuperAdmin&&<td style={{padding:'8px 5px',textAlign:'center',borderLeft:'1px solid #1a2a3a'}}>
                         <Btn size='sm' onClick={()=>showToast({msg:'Usa la pestaña Frozen Ville para editar',type:'warn'})}>✏</Btn>
-                      </td>
+                      </td>}
+                      {/* FV edit only superadmin */}
                     </tr>
                   )
                 })}
@@ -985,6 +988,7 @@ export default function AdminPage(){
   const [toast,setToast]=useState<TT|null>(null)
   const [username,setUsername]=useState(''), [password,setPassword]=useState(''), [authErr,setAuthErr]=useState('')
   const [userPerms,setUserPerms]=useState<Record<string,boolean>>({})
+  const [isSuperAdmin,setIsSuperAdmin]=useState(false)
   const [mobileMenuOpen,setMobileMenuOpen]=useState(false)
   const showToast=(t:TT)=>setToast(t)
 
@@ -1001,8 +1005,10 @@ export default function AdminPage(){
           const all:Record<string,boolean>={}
           ALL_PERMS.forEach(p=>all[p.key]=true)
           setUserPerms(all)
+          setIsSuperAdmin(true)
         } else {
           setUserPerms(data?.permissions??{})
+          setIsSuperAdmin(false)
         }
       })
   },[session])
@@ -1087,7 +1093,7 @@ export default function AdminPage(){
 
       {/* Main content */}
       <div style={{maxWidth:1300,margin:'0 auto',padding:'16px'}}>
-        {tab==='ranking'      &&<RankingTab showToast={showToast}/>}
+        {tab==='ranking'      &&<RankingTab showToast={showToast} isSuperAdmin={isSuperAdmin}/>}
         {tab==='jugadores'    &&<JugadoresTab showToast={showToast}/>}
         {tab==='mazes'        &&<MazesTab showToast={showToast}/>}
         {tab==='claims'       &&<ClaimsTab showToast={showToast}/>}
