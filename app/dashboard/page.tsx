@@ -530,8 +530,6 @@ export default function DashboardPage() {
         {/* ── LAST TIME BOSS ── */}
         <LastTimeBoss/>
 
-      )}
-
       </div>
     </div>
   )
