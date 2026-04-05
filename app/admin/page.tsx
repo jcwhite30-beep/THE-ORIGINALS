@@ -989,7 +989,6 @@ export default function AdminPage(){
   const [username,setUsername]=useState(''), [password,setPassword]=useState(''), [authErr,setAuthErr]=useState('')
   const [userPerms,setUserPerms]=useState<Record<string,boolean>>({})
   const [isSuperAdmin,setIsSuperAdmin]=useState(false)
-  const [mobileMenuOpen,setMobileMenuOpen]=useState(false)
   const showToast=(t:TT)=>setToast(t)
 
   useEffect(()=>{
@@ -1046,62 +1045,88 @@ export default function AdminPage(){
     </div>
   )
 
-  const TABS=([
-    {key:'ranking'      as TabKey,label:'📊 Ranking',        permKey:'ranking'},
-    {key:'jugadores'    as TabKey,label:'👥 Jugadores',       permKey:'jugadores'},
-    {key:'mazes'        as TabKey,label:'📤 Mazes',           permKey:'mazes'},
-    {key:'claims'       as TabKey,label:'🏆 Claims',          permKey:'claims'},
-    {key:'conciliacion' as TabKey,label:'💰 Conciliación',    permKey:'conciliacion'},
-    {key:'stats'        as TabKey,label:'📈 Estadísticas',    permKey:'stats'},
-    {key:'anuncios'     as TabKey,label:'📢 Anuncios',        permKey:'anuncios'},
-    {key:'historico'    as TabKey,label:'📋 Histórico',       permKey:'historico'},
-    {key:'usuarios'     as TabKey,label:'🔑 Usuarios',        permKey:'usuarios'},
-  ] as {key:TabKey;label:string;permKey:string}[]).filter(t=>userPerms[t.permKey])
-
-  const currentTab=TABS.find(t=>t.key===tab)
-
   return (
     <div style={{minHeight:'100vh',background:VOID,fontFamily:'Rajdhani,sans-serif'}}>
       {toast&&<Toast t={toast} onClose={()=>setToast(null)}/>}
 
-      {/* Header */}
-      <header style={{background:'linear-gradient(180deg,#0c0014 0%,#04040e 100%)',borderBottom:'1px solid #c9a84c28',position:'sticky',top:0,zIndex:100}}>
-        <div style={{maxWidth:1300,margin:'0 auto',padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
-          <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>
-            <span style={{fontSize:20,flexShrink:0}}>🐉</span>
-            <span style={{fontFamily:'Cinzel,serif',fontWeight:900,fontSize:14,letterSpacing:'0.08em',background:'linear-gradient(135deg,#f0d080,#c9a84c)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>THE ORIGINALS</span>
+      {/* Top header — slim */}
+      <header style={{background:'linear-gradient(90deg,#0c0014,#04040e)',borderBottom:'1px solid #c9a84c28',position:'sticky',top:0,zIndex:200}}>
+        <div style={{padding:'10px 16px',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <span style={{fontSize:18}}>🐉</span>
+            <span style={{fontFamily:'Cinzel,serif',fontWeight:900,fontSize:13,letterSpacing:'0.08em',background:'linear-gradient(135deg,#f0d080,#c9a84c)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',whiteSpace:'nowrap'}}>THE ORIGINALS · ADMIN</span>
           </div>
-          <div style={{display:'flex',alignItems:'center',gap:10}}>
-            {/* Mobile menu button */}
-            <button onClick={()=>setMobileMenuOpen(v=>!v)} style={{fontFamily:'Cinzel,serif',fontSize:16,color:'#888',border:`1px solid ${BORDER}`,borderRadius:6,padding:'5px 10px',background:'none',cursor:'pointer',display:'flex',alignItems:'center'}}>☰</button>
-            <button onClick={()=>supabase.auth.signOut()} style={{fontFamily:'Cinzel,serif',fontSize:8,color:'#555',border:`1px solid ${BORDER}`,padding:'5px 10px',borderRadius:5,background:'none',cursor:'pointer',textTransform:'uppercase',letterSpacing:'0.08em',whiteSpace:'nowrap'}}>Salir</button>
-          </div>
-        </div>
-
-        {/* Tab bar — scrollable on mobile */}
-        <div style={{overflowX:'auto',borderTop:'1px solid #1a1a3a'}}>
-          <div style={{display:'flex',minWidth:'max-content',padding:'0 12px'}}>
-            {TABS.map(t=>(
-              <button key={t.key} onClick={()=>{setTab(t.key);setMobileMenuOpen(false)}}
-                style={{fontSize:9,padding:'9px 14px',background:'transparent',border:'none',borderBottom:tab===t.key?`2px solid ${G}`:'2px solid transparent',color:tab===t.key?G:'#888',cursor:'pointer',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:tab===t.key?700:400,whiteSpace:'nowrap',transition:'color 0.15s'}}>
-                {t.label}
-              </button>
-            ))}
+          <div style={{display:'flex',alignItems:'center',gap:8}}>
+            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12,display:'none'}}>{session.user.email}</span>
+            <button onClick={()=>supabase.auth.signOut()} style={{fontFamily:'Cinzel,serif',fontSize:8,color:'#666',border:`1px solid ${BORDER}`,padding:'5px 12px',borderRadius:5,background:'none',cursor:'pointer',textTransform:'uppercase',letterSpacing:'0.08em',whiteSpace:'nowrap'}}>Salir</button>
           </div>
         </div>
       </header>
 
-      {/* Main content */}
-      <div style={{maxWidth:1300,margin:'0 auto',padding:'16px'}}>
-        {tab==='ranking'      &&<RankingTab showToast={showToast} isSuperAdmin={isSuperAdmin}/>}
-        {tab==='jugadores'    &&<JugadoresTab showToast={showToast}/>}
-        {tab==='mazes'        &&<MazesTab showToast={showToast}/>}
-        {tab==='claims'       &&<ClaimsTab showToast={showToast}/>}
-        {tab==='conciliacion' &&<ConciliacionTab showToast={showToast}/>}
-        {tab==='stats'        &&<StatsTab/>}
-        {tab==='anuncios'     &&<AnunciosTab showToast={showToast}/>}
-        {tab==='historico'    &&<HistoricoTab/>}
-        {tab==='usuarios'     &&<UsuariosTab showToast={showToast}/>}
+      {/* Body: sidebar + content */}
+      <div style={{display:'flex',minHeight:'calc(100vh - 45px)'}}>
+
+        {/* LEFT SIDEBAR */}
+        <nav style={{
+          width:200,flexShrink:0,
+          background:'#080814',
+          borderRight:`1px solid ${BORDER}`,
+          position:'sticky',top:45,
+          height:'calc(100vh - 45px)',
+          overflowY:'auto',
+          padding:'16px 0'
+        }}>
+          {/* Always show all tabs — filter if perms loaded */}
+          {([
+            {key:'ranking'      as TabKey,label:'📊 Ranking',        permKey:'ranking'},
+            {key:'jugadores'    as TabKey,label:'👥 Jugadores',       permKey:'jugadores'},
+            {key:'mazes'        as TabKey,label:'📤 Mazes',           permKey:'mazes'},
+            {key:'claims'       as TabKey,label:'🏆 Claims',          permKey:'claims'},
+            {key:'conciliacion' as TabKey,label:'💰 Conciliación',    permKey:'conciliacion'},
+            {key:'stats'        as TabKey,label:'📈 Estadísticas',    permKey:'stats'},
+            {key:'anuncios'     as TabKey,label:'📢 Anuncios',        permKey:'anuncios'},
+            {key:'historico'    as TabKey,label:'📋 Histórico',       permKey:'historico'},
+            {key:'usuarios'     as TabKey,label:'🔑 Usuarios',        permKey:'usuarios'},
+          ] as {key:TabKey;label:string;permKey:string}[])
+          .filter(t => !session || Object.keys(userPerms).length === 0 || isSuperAdmin || userPerms[t.permKey])
+          .map(t=>(
+            <button key={t.key} onClick={()=>setTab(t.key)}
+              style={{
+                display:'block',width:'100%',textAlign:'left',
+                padding:'11px 18px',
+                background:tab===t.key?`${G}15`:'transparent',
+                border:'none',
+                borderLeft:tab===t.key?`3px solid ${G}`:'3px solid transparent',
+                borderRight:'none',borderTop:'none',borderBottom:'none',
+                color:tab===t.key?G:'#888',
+                cursor:'pointer',
+                fontFamily:'Cinzel,serif',fontSize:10,
+                textTransform:'uppercase',letterSpacing:'0.08em',
+                fontWeight:tab===t.key?700:400,
+                transition:'all 0.15s',
+                whiteSpace:'nowrap',
+              }}
+              onMouseEnter={e=>{if(tab!==t.key)(e.currentTarget as HTMLElement).style.color='#bbb'}}
+              onMouseLeave={e=>{if(tab!==t.key)(e.currentTarget as HTMLElement).style.color='#888'}}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
+
+        {/* MAIN CONTENT */}
+        <main style={{flex:1,minWidth:0,padding:'20px',overflowX:'hidden'}}>
+          {tab==='ranking'      &&<RankingTab showToast={showToast} isSuperAdmin={isSuperAdmin}/>}
+          {tab==='jugadores'    &&<JugadoresTab showToast={showToast}/>}
+          {tab==='mazes'        &&<MazesTab showToast={showToast}/>}
+          {tab==='claims'       &&<ClaimsTab showToast={showToast}/>}
+          {tab==='conciliacion' &&<ConciliacionTab showToast={showToast}/>}
+          {tab==='stats'        &&<StatsTab/>}
+          {tab==='anuncios'     &&<AnunciosTab showToast={showToast}/>}
+          {tab==='historico'    &&<HistoricoTab/>}
+          {tab==='usuarios'     &&<UsuariosTab showToast={showToast}/>}
+        </main>
+
       </div>
     </div>
   )
