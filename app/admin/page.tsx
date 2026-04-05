@@ -17,7 +17,7 @@ const f2 = (n:number) => Number(n??0).toFixed(2)
 const fi = (n:number) => Math.floor(n??0)
 
 // ─── Tab definition ───────────────────────────────────────────
-type TabKey = 'ranking'|'jugadores'|'upload'|'claims'|'contabilidad'|'stats'|'anuncios'|'fv'|'usuarios'
+type TabKey = 'ranking'|'jugadores'|'upload'|'claims'|'contabilidad'|'stats'|'anuncios'|'fv'|'historico'|'usuarios'
 
 // ─── FV Runes ─────────────────────────────────────────────────
 const FV_RUNES = [
@@ -104,19 +104,23 @@ function RankingTab() {
     return lb.filter(p=>p.name.toLowerCase().includes(s)||(p.chars||'').toLowerCase().includes(s))
   },[lb,search])
 
-  // Admin row (Administrador special)
-  const adminPts = { total:232.12, avail:132.12, claimsDisp:0, claimsDone:20 }
-  const totalAvail = lb.reduce((s,p)=>s+p.available_points,0)
+  // Admin stats (vista ADMIN: jugadores + admin + guild events)
+  // 469.47 jugadores + 132.12 admin + 148.41 guild events = 750 total
+  // Claims disponibles: 750/5 = 150 | Loots en banco: 73 | Loots fuera: 77
+  const ADMIN_TOTAL_PTS = 750
+  const ADMIN_CLAIMS_DISP = 150
+  const ADMIN_LOOTS_BANCO = 73
+  const ADMIN_LOOTS_FUERA = 77
 
   return (
     <div>
       {/* Summary cards */}
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:20}}>
         {[
-          {icon:'🏆',label:'Claims Disp. (Guild)',val:fi(totalAvail/5),sub:`${f2(totalAvail)} pts totales`,col:G},
-          {icon:'👑',label:'Pts Admin Disp.',val:f2(adminPts.avail),sub:'Solo visible para admins',col:'#e05050'},
-          {icon:'🏦',label:'Claims Admin Hechos',val:adminPts.claimsDone,sub:`${f2(adminPts.total)} total score`,col:'#4ab8f0'},
-          {icon:'📊',label:'Jugadores activos',val:lb.length,sub:'con puntos registrados',col:'#40d0a0'},
+          {icon:'🏆',label:'Claims Disp. (Total)',val:ADMIN_CLAIMS_DISP,sub:`${ADMIN_TOTAL_PTS} pts disponibles totales`,col:G},
+          {icon:'🏦',label:'Loots en Banco',val:ADMIN_LOOTS_BANCO,sub:'BD loots en banco',col:'#4ab8f0'},
+          {icon:'📦',label:'Loots Fuera Banco',val:ADMIN_LOOTS_FUERA,sub:'BD loots fuera del banco',col:'#f0a020'},
+          {icon:'👑',label:'Claims Admin Hechos',val:0,sub:'132.12 pts admin disponibles',col:'#e05050'},
         ].map(s=>(
           <div key={s.label} style={{background:CARD,border:`1px solid ${s.col}30`,borderRadius:12,padding:'14px 16px'}}>
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
@@ -837,6 +841,7 @@ const ALL_PERMS = [
   {key:'stats',label:'Estadísticas'},
   {key:'anuncios',label:'Anuncios'},
   {key:'fv',label:'Frozen Ville'},
+  {key:'historico',label:'Histórico'},
   {key:'usuarios',label:'Usuarios'},
 ]
 
@@ -932,8 +937,15 @@ export default function AdminPage() {
     // Load user permissions
     supabase.from('admin_profiles').select('permissions,role').eq('id',session.user.id).single()
       .then(({data})=>{
-        if(data?.role==='superadmin') setUserPerms(Object.fromEntries(ALL_PERMS.map(p=>[p.key,true])))
-        else setUserPerms(data?.permissions??{})
+        if(data?.role==='superadmin') {
+          // SuperAdmin ve TODAS las pestañas siempre
+          const all: Record<string,boolean> = {}
+          ALL_PERMS.forEach(p=>all[p.key]=true)
+          all['historico']=true
+          setUserPerms(all)
+        } else {
+          setUserPerms({...data?.permissions, historico: data?.permissions?.historico ?? false})
+        }
       })
   },[session])
 
@@ -981,6 +993,7 @@ export default function AdminPage() {
     {key:'stats',          label:'📈 Estadísticas',    permKey:'stats'},
     {key:'anuncios',       label:'📢 Anuncios',        permKey:'anuncios'},
     {key:'fv',             label:'❄️ Frozen Ville',    permKey:'fv'},
+    {key:'historico',      label:'📋 Histórico',       permKey:'historico'},
     {key:'usuarios',       label:'🔑 Usuarios',        permKey:'usuarios'},
   ].filter(t=>userPerms[t.permKey]) as {key:TabKey; label:string; permKey:string}[]
 
@@ -1020,6 +1033,7 @@ export default function AdminPage() {
         {tab==='stats'        && <StatsTab/>}
         {tab==='anuncios'     && <AnunciosTab showToast={showToast}/>}
         {tab==='fv'           && <FVAdminTab showToast={showToast}/>}
+        {tab==='historico'    && <HistoricoTab/>}
         {tab==='usuarios'     && <UsuariosTab showToast={showToast}/>}
       </div>
     </div>
@@ -1088,6 +1102,103 @@ function FVAdminTab({showToast}:{showToast:(t:TT)=>void}) {
           upsertFVRunePoints(selId,edits).then(()=>{showToast({msg:'FV guardado',type:'ok'});setEdits({});load()}).catch((e:any)=>showToast({msg:'Error: '+e.message,type:'err'})).finally(()=>setBusy(false))
         }} disabled={busy||!selId}>{busy?'Guardando...':'✓ Guardar FV Points'}</Btn>
       </SCard>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// ─── HISTÓRICO TAB — Audit log de todos los cambios ───────────
+// ══════════════════════════════════════════════════════════════
+function HistoricoTab() {
+  const [logs, setLogs] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState<'all'|'claims'|'players'|'maze'|'accounting'|'announcements'>('all')
+
+  useEffect(()=>{ load() },[filter])
+
+  async function load() {
+    setLoading(true)
+    let query = supabase.from('admin_audit_log')
+      .select('*, admin_profiles(username)')
+      .order('created_at',{ascending:false})
+      .limit(200)
+    if (filter !== 'all') query = query.eq('action_type', filter)
+    const {data} = await query
+    setLogs(data??[])
+    setLoading(false)
+  }
+
+  const typeColors: Record<string,string> = {
+    claims:'#40d0a0', players:'#4ab8f0', maze:'#e05050',
+    accounting:'#c9a84c', announcements:'#c040c0', fv:'#4ab8f0', users:'#888'
+  }
+  const typeLabels: Record<string,string> = {
+    claims:'Claim', players:'Jugador', maze:'Maze',
+    accounting:'Contabilidad', announcements:'Anuncio', fv:'FV Points', users:'Usuario'
+  }
+
+  return (
+    <div>
+      {/* Filter tabs */}
+      <div style={{display:'flex',gap:6,marginBottom:16,flexWrap:'wrap'}}>
+        {(['all','claims','players','maze','accounting','announcements'] as const).map(f=>(
+          <button key={f} onClick={()=>setFilter(f)}
+            style={{padding:'6px 14px',borderRadius:6,border:`1px solid ${filter===f?G:BORDER}`,background:filter===f?`${G}18`:CARD,color:filter===f?G:'#666',cursor:'pointer',fontFamily:'Cinzel,serif',fontSize:9,textTransform:'uppercase',letterSpacing:'0.08em'}}>
+            {f==='all'?'Todos':typeLabels[f]??f}
+          </button>
+        ))}
+      </div>
+
+      <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
+        <div style={{padding:'10px 20px',borderBottom:`1px solid ${BORDER}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span style={{fontFamily:'Cinzel,serif',fontSize:10,color:GD,textTransform:'uppercase',letterSpacing:'0.1em'}}>📋 Historial de movimientos — {logs.length} registros</span>
+          <button onClick={load} style={{fontFamily:'Cinzel,serif',fontSize:8,color:'#666',border:`1px solid ${BORDER}`,borderRadius:4,padding:'4px 10px',background:'none',cursor:'pointer',textTransform:'uppercase'}}>↻ Actualizar</button>
+        </div>
+        {loading ? (
+          <div style={{padding:'40px',textAlign:'center',fontFamily:'Rajdhani,sans-serif',color:'#555'}}>Cargando historial...</div>
+        ) : logs.length === 0 ? (
+          <div style={{padding:'40px',textAlign:'center',fontFamily:'Rajdhani,sans-serif',color:'#333',fontSize:13}}>Sin registros aún — los movimientos aparecerán aquí automáticamente.</div>
+        ) : (
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${BORDER}`}}>
+                  {['Fecha / Hora','Admin','Tipo','Acción','Detalle'].map((h,i)=>(
+                    <th key={h} style={{padding:'8px 14px',textAlign:'left',fontFamily:'Cinzel,serif',fontSize:8,color:'#666',textTransform:'uppercase',letterSpacing:'0.08em',whiteSpace:'nowrap'}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {logs.map((log,i)=>{
+                  const col = typeColors[log.action_type] ?? '#888'
+                  const dt = new Date(log.created_at)
+                  return (
+                    <tr key={log.id} style={{borderBottom:`1px solid #0f0f20`}}
+                      onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='#0e0e26'}}
+                      onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}>
+                      <td style={{padding:'9px 14px',fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:12,whiteSpace:'nowrap'}}>
+                        {dt.toLocaleDateString('es-PA')} {dt.toLocaleTimeString('es-PA',{hour:'2-digit',minute:'2-digit'})}
+                      </td>
+                      <td style={{padding:'9px 14px',fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:12}}>
+                        {log.admin_profiles?.username ?? '—'}
+                      </td>
+                      <td style={{padding:'9px 14px'}}>
+                        <span style={{fontFamily:'Cinzel,serif',fontSize:8,padding:'2px 8px',borderRadius:10,border:`1px solid ${col}50`,color:col,textTransform:'uppercase',letterSpacing:'0.06em'}}>
+                          {typeLabels[log.action_type] ?? log.action_type}
+                        </span>
+                      </td>
+                      <td style={{padding:'9px 14px',fontFamily:'Rajdhani,sans-serif',color:'#e8e0d0',fontSize:13}}>{log.action}</td>
+                      <td style={{padding:'9px 14px',fontFamily:'Rajdhani,sans-serif',color:'#666',fontSize:12,maxWidth:300}}>
+                        {log.details ? JSON.stringify(log.details).slice(0,120) : '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -418,12 +418,13 @@ export default function DashboardPage() {
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<LeaderboardEntry|null>(null)
 
-  // Excel stats
-  const LOOTS_CLAIMS = 150
-  const LOOTS_BANCO = 73
-  const LOOTS_FUERA = 77
-  const EVENTS_AVAIL = 148.41
-  const ADMIN_AVAIL = 132.12
+  // Stats del Excel (Vista PÚBLICA: jugadores + guild events, sin admin)
+  // Total pts disponibles jugadores: ~469.47 + guild events 148.41 = 617.88 → floor to 5 = 615
+  const TOTAL_PTS_PUBLIC = 615          // redondeado hacia abajo al múltiplo de 5
+  const CLAIMS_DISP_PUBLIC = 123        // 615 / 5 = 123
+  const LOOTS_BANCO = 46               // loots actualmente en banco
+  const LOOTS_FUERA = 77               // loots fuera de banco
+  const EVENTS_AVAIL = 148.41          // puntos disponibles guild events
 
   async function loadData() {
     const [l, e] = await Promise.all([getPublicLeaderboard(), getGuildEvents()])
@@ -488,10 +489,10 @@ export default function DashboardPage() {
 
         {/* ── TOP STAT CARDS ── */}
         <div className="grid grid-cols-4 gap-3 mb-4">
-          <StatCard icon="🏆" label="Claims Disponibles" value={loading?'…':totalClaimsDisp} sub={`${f2(totalAvail)} pts totales`} color={G}/>
-          <StatCard icon="🏦" label="Loots en Banco" value={LOOTS_BANCO} sub="BD loots depositados" color="#4ab8f0"/>
-          <StatCard icon="📦" label="Loots Fuera Banco" value={LOOTS_FUERA} sub="BD loots pendientes" color="#f0a020"/>
-          <StatCard icon="🎪" label="Pts Events Disp." value={f2(EVENTS_AVAIL)} sub="Guild EVENTS available" color="#40d0a0"/>
+          <StatCard icon="🏆" label="Claims Disponibles" value={loading?'…':CLAIMS_DISP_PUBLIC} sub={`${TOTAL_PTS_PUBLIC} pts totales disponibles`} color={G}/>
+          <StatCard icon="🏦" label="Loots en Banco" value={LOOTS_BANCO} sub="BD loots en banco" color="#4ab8f0"/>
+          <StatCard icon="📦" label="Loots Fuera Banco" value={LOOTS_FUERA} sub="BD loots fuera del banco" color="#f0a020"/>
+          <StatCard icon="🎪" label="Pts Events Disp." value={f2(EVENTS_AVAIL)} sub="Guild EVENTS disponibles" color="#40d0a0"/>
         </div>
 
         {/* ── 7 FV RUNE CARDS ── */}
