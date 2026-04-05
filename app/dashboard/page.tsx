@@ -1,7 +1,7 @@
 'use client'
 export const dynamic = 'force-dynamic'
 import { useEffect, useState, useMemo } from 'react'
-import { getPublicLeaderboard, getGuildEvents, processClaim, supabase, LeaderboardEntry, GuildEvent } from '@/lib/supabase'
+import { getPublicLeaderboard, processClaim, supabase, LeaderboardEntry } from '@/lib/supabase'
 
 // ─── Design tokens ────────────────────────────────────────────
 const G='#c9a84c', GD='#7a6030', CARD='#0d0d1e', DEEP='#070712', BORDER='#22224a', VOID='#04040e'
@@ -412,7 +412,6 @@ function LastTimeBoss() {
 // ─── Main Dashboard ────────────────────────────────────────────
 export default function DashboardPage() {
   const [lb, setLb] = useState<LeaderboardEntry[]>([])
-  const [events, setEvents] = useState<GuildEvent[]>([])
   const [fvTotals, setFvTotals] = useState<Record<string,{avail:number;claims:number}>>({})
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -488,7 +487,7 @@ export default function DashboardPage() {
         <Announcements/>
 
         {/* ── TOP STAT CARDS ── */}
-        <div className="grid grid-cols-4 gap-3 mb-4">
+        <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,marginBottom:16}}>
           <StatCard icon="🏆" label="Claims Disponibles" value={loading?'…':CLAIMS_DISP_PUBLIC} sub={`${TOTAL_PTS_PUBLIC} pts totales disponibles`} color={G}/>
           <StatCard icon="🏦" label="Loots en Banco" value={LOOTS_BANCO} sub="BD loots en banco" color="#4ab8f0"/>
           <StatCard icon="📦" label="Loots Fuera Banco" value={LOOTS_FUERA} sub="BD loots fuera del banco" color="#f0a020"/>
@@ -496,7 +495,7 @@ export default function DashboardPage() {
         </div>
 
         {/* ── 7 FV RUNE CARDS ── */}
-        <div className="grid grid-cols-7 gap-2 mb-5">
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:8,marginBottom:16}}>
           {FV_RUNES.map(r => (
             <RuneStatCard key={r.key} rune={r}
               avail={fvTotals[r.key]?.avail ?? 0}
@@ -531,28 +530,7 @@ export default function DashboardPage() {
         {/* ── LAST TIME BOSS ── */}
         <LastTimeBoss/>
 
-        {/* ── GUILD EVENTS ── */}
-        {events.length>0 && (
-          <div style={{background:CARD, border:`1px solid ${BORDER}`, borderRadius:12, overflow:'hidden'}}>
-            <div className="flex items-center justify-between px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
-              <h2 className="font-cinzel uppercase tracking-widest" style={{fontSize:10, color:GD}}>🏆 Guild Events</h2>
-              <span className="font-cinzel font-bold" style={{fontSize:13, color:G}}>{f2(events.reduce((s,e)=>s+e.points,0))} pts</span>
-            </div>
-            {events.map((ev,i) => (
-              <div key={ev.id} className="flex items-center justify-between px-5 py-3"
-                style={{borderBottom:i<events.length-1?`1px solid ${BORDER}`:'none'}}>
-                <div>
-                  <p className="font-cinzel font-semibold" style={{color:'#e8e0d0', fontSize:13}}>{ev.name}</p>
-                  {ev.description&&<p className="font-rajdhani" style={{fontSize:12, color:'#888'}}>{ev.description}</p>}
-                </div>
-                <div className="text-right">
-                  <span className="font-cinzel font-bold" style={{color:G, fontSize:14}}>{f2(ev.points)} pts</span>
-                  <p className="font-rajdhani" style={{fontSize:10, color:'#555'}}>{ev.event_date}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+      )}
 
       </div>
     </div>
