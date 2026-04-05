@@ -982,7 +982,7 @@ export default function AdminPage() {
     {key:'anuncios',       label:'📢 Anuncios',        permKey:'anuncios'},
     {key:'fv',             label:'❄️ Frozen Ville',    permKey:'fv'},
     {key:'usuarios',       label:'🔑 Usuarios',        permKey:'usuarios'},
-  ].filter(t=>userPerms[t.permKey])
+  ].filter(t=>userPerms[t.permKey]) as {key:TabKey; label:string; permKey:string}[]
 
   return (
     <div style={{minHeight:'100vh',background:VOID,fontFamily:'Rajdhani,sans-serif'}}>
