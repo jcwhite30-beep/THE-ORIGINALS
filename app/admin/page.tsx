@@ -842,10 +842,10 @@ function FVTab({showToast}:{showToast:(t:any)=>void}) {
                     <td className="font-cinzel" style={{padding:'8px 12px',color:'#e8e0d0',fontSize:12}}>{p.name}</td>
                     {FV_RUNES_ADMIN.map(r=>(
                       <><td key={`${r.key}a`} className="font-rajdhani text-right" style={{padding:'8px 6px',color:'#4ab8f0',fontSize:12,borderLeft:'1px solid #1a1a3a'}}>
-                        {fv?.[`${r.key}_avail`]?.toFixed(2)??'—'}
+                        {(fv?.[`${r.key}_avail`] ?? 0).toFixed(2)}
                       </td>
                       <td key={`${r.key}c`} className="font-rajdhani text-right" style={{padding:'8px 6px',color:'#40d0a0',fontSize:12}}>
-                        {fv?.[`${r.key}_claims`]??'—'}
+                        {fv?.[`${r.key}_claims`] ?? 0}
                       </td></>
                     ))}
                   </tr>

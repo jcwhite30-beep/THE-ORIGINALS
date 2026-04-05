@@ -293,11 +293,11 @@ function FVTable({ data, loading }: { data:LeaderboardEntry[]; loading:boolean }
                         <>
                           <td key={`${r.key}-a`} className="font-rajdhani font-bold text-right"
                             style={{padding:'10px 8px', color:r.color, fontSize:13, borderLeft:'1px solid #1a2a3a'}}>
-                            {fv ? f2(fv[`${r.key}_avail`] ?? 0) : <span style={{color:'#333'}}>—</span>}
+                            {f2(fv?.[`${r.key}_avail`] ?? 0)}
                           </td>
                           <td key={`${r.key}-c`} className="font-rajdhani text-right"
                             style={{padding:'10px 8px', color:'#40d0a0', fontSize:13}}>
-                            {fv ? (fv[`${r.key}_claims`] ?? 0) : <span style={{color:'#333'}}>—</span>}
+                            {fv?.[`${r.key}_claims`] ?? 0}
                           </td>
                         </>
                       ))}
