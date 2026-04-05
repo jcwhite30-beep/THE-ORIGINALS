@@ -678,7 +678,8 @@ const FV_RUNES_ADMIN = [
   {key:'piercing', label:'Piercing'},
   {key:'riven',    label:'Riven Soul'},
   {key:'favor',    label:'Favor'},
-  {key:'prayer',   label:'Prayer'},
+  ${key:'prayer',   label:'Prayer'},
+  {key:'scroll_ring', label:'Scroll Ring'},
 ] as const
 
 function FVTab({showToast}:{showToast:(t:any)=>void}) {
