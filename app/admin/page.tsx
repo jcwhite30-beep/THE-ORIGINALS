@@ -1,48 +1,281 @@
 'use client'
 export const dynamic = 'force-dynamic'
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useMemo } from 'react'
 import {
   supabase, getAdminLeaderboard, getAllPlayers, getPendingAlerts,
   getClaims, approveClaim, processClaim, resolveAlert, createMazeSession,
   addPlayerPoints, createPlayer, updatePlayer, suggestPlayerName,
   getAnnouncements, createAnnouncement, deleteAnnouncement,
   getFVRunePoints, upsertFVRunePoints, updateReportDate,
-  LeaderboardEntry, Player, PointAlert, Claim, MazeType, Announcement, FVRunePoints
+  LeaderboardEntry, Player, PointAlert, Claim, MazeType, Announcement
 } from '@/lib/supabase'
 import { parseMazeReport, calcPointShare, runOCR } from '@/lib/ocr'
 
-type Tab = 'rankings'|'players'|'upload'|'claims'|'alerts'|'events'|'anuncios'|'fv'|'users'
-const G='#c9a84c',GD='#7a6030',CARD='#0c0c22',DEEP='#07071a',VOID='#04040e',BORDER='#1e1e40'
+// ─── Design tokens ────────────────────────────────────────────
+const G='#c9a84c', GD='#7a6030', CARD='#0d0d1e', DEEP='#070712', VOID='#04040e', BORDER='#22224a'
+const f2 = (n:number) => Number(n??0).toFixed(2)
+const fi = (n:number) => Math.floor(n??0)
 
-// ── Toast ──────────────────────────────────────────────────────
-type TT={msg:string;type:'ok'|'err'|'warn'}
+// ─── Tab definition ───────────────────────────────────────────
+type TabKey = 'ranking'|'jugadores'|'upload'|'claims'|'contabilidad'|'stats'|'anuncios'|'fv'|'usuarios'
+
+// ─── FV Runes ─────────────────────────────────────────────────
+const FV_RUNES = [
+  {key:'curse',       label:'Curse',       color:'#c040c0'},
+  {key:'illusory',    label:'Illusory',    color:'#4080f0'},
+  {key:'piercing',    label:'Piercing',    color:'#f0a020'},
+  {key:'riven',       label:'Riven Soul',  color:'#e03030'},
+  {key:'favor',       label:'Favor',       color:'#40d0a0'},
+  {key:'prayer',      label:'Prayer',      color:'#d0d040'},
+  {key:'scroll_ring', label:'Scroll Ring', color:'#c9a84c'},
+] as const
+
+// ─── Toast ────────────────────────────────────────────────────
+type TT = {msg:string; type:'ok'|'err'|'warn'}
 function Toast({t,onClose}:{t:TT;onClose:()=>void}) {
   useEffect(()=>{const x=setTimeout(onClose,3500);return()=>clearTimeout(x)},[])
   const c={ok:{bg:'#0a2a1a',border:'#20a060',text:'#40d090'},err:{bg:'#2a0a0a',border:'#a02020',text:'#e04040'},warn:{bg:'#2a1a00',border:'#a06000',text:'#d09020'}}[t.type]
-  return <div className="fade-in font-rajdhani font-semibold" style={{position:'fixed',bottom:24,right:24,zIndex:9999,padding:'11px 18px',borderRadius:8,fontSize:14,background:c.bg,border:`1px solid ${c.border}`,color:c.text}}>{t.msg}</div>
+  return <div style={{position:'fixed',bottom:24,right:24,zIndex:9999,padding:'11px 18px',borderRadius:8,fontSize:14,fontFamily:'Rajdhani,sans-serif',fontWeight:600,background:c.bg,border:`1px solid ${c.border}`,color:c.text}}>{t.msg}</div>
 }
 
-// ── Players Tab ───────────────────────────────────────────────
-function PlayersTab({showToast}:{showToast:(t:TT)=>void}) {
-  const [players, setPlayers] = useState<Player[]>([])
-  const [editing, setEditing] = useState<string|null>(null)
-  const [editData, setEditData] = useState<Partial<Player>>({})
-  const [showNew, setShowNew] = useState(false)
-  const [newP, setNewP] = useState({name:'',owner:'',chars:'',class:''})
-  const [busy, setBusy] = useState(false)
-  const [search, setSearch] = useState('')
+// ─── Skeleton ─────────────────────────────────────────────────
+function Sk({w,h=14}:{w:number;h?:number}) {
+  return <div className="skeleton rounded" style={{width:w,height:h,display:'inline-block'}}/>
+}
 
-  async function load() { setPlayers(await getAllPlayers()) }
+// ─── Section card ─────────────────────────────────────────────
+function SCard({children,title,color=BORDER}:{children:React.ReactNode;title?:string;color?:string}) {
+  return (
+    <div style={{background:CARD,border:`1px solid ${color}`,borderRadius:12,overflow:'hidden',marginBottom:16}}>
+      {title&&<div className="px-5 py-3 font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD,borderBottom:`1px solid ${BORDER}`}}>{title}</div>}
+      <div className="p-5">{children}</div>
+    </div>
+  )
+}
+
+function Input({label,value,onChange,type='text',placeholder=''}:{label:string;value:string;onChange:(v:string)=>void;type?:string;placeholder?:string}) {
+  return (
+    <div style={{marginBottom:12}}>
+      <div style={{fontSize:10,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>{label}</div>
+      <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+        style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'8px 12px',color:'#e8e0d0',fontSize:14,fontFamily:'Rajdhani,sans-serif',boxSizing:'border-box'}}/>
+    </div>
+  )
+}
+
+function Btn({children,onClick,disabled,variant='gold',size='md'}:{children:React.ReactNode;onClick?:()=>void;disabled?:boolean;variant?:'gold'|'ghost'|'danger'|'green';size?:'sm'|'md'}) {
+  const bg = {gold:`linear-gradient(135deg,#8a6020,#c9a84c)`,ghost:'transparent',danger:'#2a0a0a',green:'linear-gradient(135deg,#2a6030,#40a060)'}[variant]
+  const col = {gold:VOID,ghost:'#888',danger:'#e04040',green:'#e8ffe8'}[variant]
+  const border = {gold:'none',ghost:`1px solid ${BORDER}`,danger:'1px solid #a0202060',green:'none'}[variant]
+  const pad = size==='sm' ? '6px 14px' : '9px 20px'
+  return (
+    <button onClick={onClick} disabled={disabled}
+      style={{fontSize:size==='sm'?9:10,padding:pad,borderRadius:7,background:bg,border,color:col,cursor:disabled?'not-allowed':'pointer',opacity:disabled?0.5:1,fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',fontWeight:700}}>
+      {children}
+    </button>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// ─── RANKING TAB (mismo que dashboard público + admin_pts) ────
+// ══════════════════════════════════════════════════════════════
+function RankingTab() {
+  const [lb, setLb] = useState<LeaderboardEntry[]>([])
+  const [fvData, setFvData] = useState<Record<string,any>>({})
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [bdDate, setBdDate] = useState(''), [fvDate, setFvDate] = useState('')
+
+  useEffect(()=>{
+    getAdminLeaderboard().then(d=>{setLb(d);setLoading(false)})
+    supabase.from('fv_rune_points').select('*, players(name)').then(({data:d})=>{
+      const map:Record<string,any>={}
+      ;(d??[]).forEach((r:any)=>{if(r.players?.name)map[r.players.name]=r})
+      setFvData(map)
+    })
+    supabase.from('report_dates').select('*').then(({data:d})=>{
+      d?.forEach((r:any)=>{ if(r.maze_type==='BD') setBdDate(r.last_date); if(r.maze_type==='FV') setFvDate(r.last_date) })
+    })
+  },[])
+
+  const filtered = useMemo(()=>{
+    if(!search.trim()) return lb
+    const s=search.toLowerCase()
+    return lb.filter(p=>p.name.toLowerCase().includes(s)||(p.chars||'').toLowerCase().includes(s))
+  },[lb,search])
+
+  // Admin row (Administrador special)
+  const adminPts = { total:232.12, avail:132.12, claimsDisp:0, claimsDone:20 }
+  const totalAvail = lb.reduce((s,p)=>s+p.available_points,0)
+
+  return (
+    <div>
+      {/* Summary cards */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:20}}>
+        {[
+          {icon:'🏆',label:'Claims Disp. (Guild)',val:fi(totalAvail/5),sub:`${f2(totalAvail)} pts totales`,col:G},
+          {icon:'👑',label:'Pts Admin Disp.',val:f2(adminPts.avail),sub:'Solo visible para admins',col:'#e05050'},
+          {icon:'🏦',label:'Claims Admin Hechos',val:adminPts.claimsDone,sub:`${f2(adminPts.total)} total score`,col:'#4ab8f0'},
+          {icon:'📊',label:'Jugadores activos',val:lb.length,sub:'con puntos registrados',col:'#40d0a0'},
+        ].map(s=>(
+          <div key={s.label} style={{background:CARD,border:`1px solid ${s.col}30`,borderRadius:12,padding:'14px 16px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:4}}>
+              <span style={{fontSize:14}}>{s.icon}</span>
+              <span style={{fontFamily:'Cinzel,serif',fontSize:8,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em'}}>{s.label}</span>
+            </div>
+            <div style={{fontFamily:'Cinzel,serif',fontSize:22,fontWeight:700,color:s.col,lineHeight:1}}>{s.val}</div>
+            <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555',marginTop:3}}>{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Search */}
+      <div style={{position:'relative',marginBottom:16}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar jugador..."
+          style={{width:'100%',background:CARD,border:`1px solid ${BORDER}`,borderRadius:10,padding:'11px 16px 11px 42px',color:'#e8e0d0',fontSize:15,fontFamily:'Rajdhani,sans-serif',boxSizing:'border-box'}}/>
+        <span style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',color:'#555'}}>🔍</span>
+      </div>
+
+      {/* BD Table */}
+      <div style={{background:CARD,border:'1px solid #e0505035',borderRadius:14,overflow:'hidden',marginBottom:16}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 20px',borderBottom:'1px solid #e0505025',background:'#0e080a'}}>
+          <span style={{fontFamily:'Cinzel,serif',fontSize:12,fontWeight:700,color:'#e05050',letterSpacing:'0.1em'}}>🐉 BLACK DRAGON</span>
+          {bdDate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#e05050',opacity:0.6}}>Último reporte: {bdDate}</span>}
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+            <thead>
+              <tr style={{borderBottom:'1px solid #1a0808'}}>
+                {[['#','center',36,'#555'],['Jugador / PJs','left',180,'#aaa'],['Total Score','right',120,'#e8e0d0'],['Pts Disp.','right',110,'#e05050'],['Admin Pts ★','right',120,G],['Claims Disp.','right',110,G],['Claims Hechos','right',120,'#40d0a0']].map(([h,a,w,c])=>(
+                  <th key={String(h)} style={{padding:'8px 12px',textAlign:a as any,width:Number(w),fontSize:8.5,color:String(c),fontWeight:700,fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.08em'}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {/* Admin row (only visible here) */}
+              <tr style={{borderBottom:'1px solid #1a0a0a',background:'#140a05'}}>
+                <td style={{padding:'10px 12px',fontFamily:'Cinzel,serif',color:'#555',fontSize:12,textAlign:'center'}}>★</td>
+                <td style={{padding:'10px 12px'}}>
+                  <div style={{fontFamily:'Cinzel,serif',fontWeight:600,color:G,fontSize:13}}>Administrador</div>
+                  <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#666'}}>Puntos de administración del guild</div>
+                </td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:'#aaa',fontSize:13}}>{f2(232.12)}</td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:'#e05050',fontSize:14}}>{f2(132.12)}</td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:14}}>{f2(132.12)}</td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:15}}>0</td>
+                <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Rajdhani,sans-serif',fontWeight:700,color:'#40d0a0',fontSize:13}}>20</td>
+              </tr>
+              {loading
+                ? Array.from({length:5}).map((_,i)=>(
+                    <tr key={i} style={{borderBottom:'1px solid #120808'}}>
+                      {[30,180,90,90,90,80,80].map((w,j)=><td key={j} style={{padding:'10px 12px'}}><Sk w={w}/></td>)}
+                    </tr>
+                  ))
+                : filtered.map((p,i)=>(
+                    <tr key={p.id} style={{borderBottom:'1px solid #120808'}}
+                      onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='#130a0a'}}
+                      onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}>
+                      <td style={{padding:'10px 12px',textAlign:'center',fontFamily:'Cinzel,serif',color:'#555',fontSize:12}}>
+                        {i<3?['🥇','🥈','🥉'][i]:i+1}
+                      </td>
+                      <td style={{padding:'10px 12px'}}>
+                        <div style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:13}}>{p.name}</div>
+                        {p.chars&&<div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#666',marginTop:1}}>{p.chars}</div>}
+                      </td>
+                      <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Cinzel,serif',color:'#aaa',fontSize:13}}>{f2(p.total_points)}</td>
+                      <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:'#e05050',fontSize:14}}>{f2(p.available_points)}</td>
+                      <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:13}}>{f2((p as any).admin_points_total??0)}</td>
+                      <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:15}}>{fi(p.available_points/5)}</td>
+                      <td style={{padding:'10px 12px',textAlign:'right',fontFamily:'Rajdhani,sans-serif',fontWeight:700,color:'#40d0a0',fontSize:13}}>{p.total_claims}</td>
+                    </tr>
+                  ))
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* FV Table */}
+      <div style={{background:CARD,border:'1px solid #4ab8f035',borderRadius:14,overflow:'hidden'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 20px',borderBottom:'1px solid #4ab8f025',background:'#080e10'}}>
+          <span style={{fontFamily:'Cinzel,serif',fontSize:12,fontWeight:700,color:'#4ab8f0',letterSpacing:'0.1em'}}>❄️ FROZEN VILLE</span>
+          {fvDate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#4ab8f0',opacity:0.6}}>Último reporte: {fvDate}</span>}
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead>
+              <tr style={{borderBottom:'1px solid #0a1414'}}>
+                <th style={{padding:'7px 12px',textAlign:'left',fontFamily:'Cinzel,serif',fontSize:8,color:'#777',minWidth:150}}>Jugador</th>
+                {FV_RUNES.map(r=>(
+                  <th key={r.key} colSpan={2} style={{padding:'7px 6px',textAlign:'center',fontFamily:'Cinzel,serif',fontSize:7.5,color:r.color,borderLeft:'1px solid #1a2a3a',textTransform:'uppercase',letterSpacing:'0.06em'}}>{r.label}</th>
+                ))}
+              </tr>
+              <tr style={{borderBottom:'1px solid #0a1414',background:'#060c0e'}}>
+                <th/>
+                {FV_RUNES.map(r=>(
+                  <><th key={`${r.key}-a`} style={{padding:'3px 7px',textAlign:'right',fontFamily:'Cinzel,serif',fontSize:7,color:'#666',borderLeft:'1px solid #1a2a3a'}}>Pts</th>
+                  <th key={`${r.key}-c`} style={{padding:'3px 7px',textAlign:'right',fontFamily:'Cinzel,serif',fontSize:7,color:'#666'}}>Claims</th></>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map(p=>{
+                const fv=fvData[p.name]
+                return (
+                  <tr key={p.id} style={{borderBottom:'1px solid #0a1414'}}
+                    onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='#0a1214'}}
+                    onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}>
+                    <td style={{padding:'9px 12px'}}>
+                      <div style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:12}}>{p.name}</div>
+                      {p.chars&&<div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#666'}}>{p.chars}</div>}
+                    </td>
+                    {FV_RUNES.map(r=>(
+                      <><td key={`${r.key}-a`} style={{padding:'9px 7px',textAlign:'right',fontFamily:'Rajdhani,sans-serif',fontWeight:700,color:r.color,fontSize:13,borderLeft:'1px solid #1a2a3a'}}>
+                        {f2(fv?.[`${r.key}_avail`]??0)}
+                      </td>
+                      <td key={`${r.key}-c`} style={{padding:'9px 7px',textAlign:'right',fontFamily:'Rajdhani,sans-serif',color:'#40d0a0',fontSize:13}}>
+                        {fv?.[`${r.key}_claims`]??0}
+                      </td></>
+                    ))}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// ─── JUGADORES TAB ────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+function JugadoresTab({showToast}:{showToast:(t:TT)=>void}) {
+  const [players,setPlayers]=useState<Player[]>([])
+  const [editing,setEditing]=useState<string|null>(null)
+  const [editData,setEditData]=useState<any>({})
+  const [showNew,setShowNew]=useState(false)
+  const [newP,setNewP]=useState({name:'',owner:'',chars:'',class:''})
+  const [search,setSearch]=useState('')
+  const [busy,setBusy]=useState(false)
+
+  async function load(){setPlayers(await getAllPlayers())}
   useEffect(()=>{load()},[])
 
-  async function saveEdit(id:string) {
+  const filtered=useMemo(()=>{
+    if(!search.trim())return players
+    const s=search.toLowerCase()
+    return players.filter(p=>p.name.toLowerCase().includes(s)||(p.chars||'').toLowerCase().includes(s))
+  },[players,search])
+
+  async function saveEdit(id:string){
     setBusy(true)
-    try { await updatePlayer(id,editData); showToast({msg:'Guardado',type:'ok'}); setEditing(null); load() }
+    try{await updatePlayer(id,editData);showToast({msg:'Guardado',type:'ok'});setEditing(null);load()}
     catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
     finally{setBusy(false)}
   }
-
-  async function handleCreate() {
+  async function handleCreate(){
     if(!newP.name){showToast({msg:'El nombre es requerido',type:'warn'});return}
     setBusy(true)
     try{await createPlayer(newP.name,newP.owner,newP.chars,newP.class);showToast({msg:'PJ creado',type:'ok'});setShowNew(false);setNewP({name:'',owner:'',chars:'',class:''});load()}
@@ -50,89 +283,53 @@ function PlayersTab({showToast}:{showToast:(t:TT)=>void}) {
     finally{setBusy(false)}
   }
 
-  const filtered = players.filter(p=>
-    p.name.toLowerCase().includes(search.toLowerCase()) ||
-    (p.owner||'').toLowerCase().includes(search.toLowerCase()) ||
-    (p.chars||'').toLowerCase().includes(search.toLowerCase())
-  )
-
-  const field = (label:string,val:string,key:keyof Player,placeholder?:string)=>(
-    <div>
-      <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>{label}</p>
-      <input value={val} onChange={e=>setEditData(d=>({...d,[key]:e.target.value}))} placeholder={placeholder}
-        className="font-rajdhani w-full" style={{background:VOID,border:`1px solid ${BORDER}`,borderRadius:5,padding:'6px 10px',color:'#e8e0d0',fontSize:13}}/>
-    </div>
-  )
-
   return (
     <div>
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16,flexWrap:'wrap',gap:8}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar jugador..."
-          className="font-rajdhani" style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:8,padding:'8px 14px',color:'#e8e0d0',fontSize:14,width:280}}/>
-        <button onClick={()=>setShowNew(v=>!v)} className="font-cinzel uppercase tracking-wider"
-          style={{fontSize:10,padding:'9px 18px',borderRadius:7,border:`1px solid ${GD}`,background:`${G}15`,color:G,cursor:'pointer'}}>
-          + Nuevo Jugador
-        </button>
+          style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:8,padding:'8px 14px',color:'#e8e0d0',fontSize:14,fontFamily:'Rajdhani,sans-serif',width:280}}/>
+        <Btn onClick={()=>setShowNew(v=>!v)}>+ Nuevo Jugador</Btn>
       </div>
 
-      {showNew && (
-        <div className="rounded-xl p-5 mb-4 fade-in" style={{background:CARD,border:`1px solid ${G}40`}}>
-          <p className="font-cinzel uppercase tracking-widest mb-4" style={{fontSize:10,color:GD}}>Nuevo Jugador</p>
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            {[['Nombre / Owner',newP.name,'name'],['Clase (opcional)',newP.class,'class'],['PJs (separados por coma)',newP.chars,'chars'],['Owner real',newP.owner,'owner']].map(([l,v,k])=>(
-              <div key={k}>
-                <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>{l}</p>
-                <input value={v} onChange={e=>setNewP(d=>({...d,[k]:e.target.value}))}
-                  className="font-rajdhani w-full" style={{background:VOID,border:`1px solid ${BORDER}`,borderRadius:5,padding:'6px 10px',color:'#e8e0d0',fontSize:13}}/>
-              </div>
+      {showNew&&(
+        <SCard title="Nuevo Jugador" color={`${G}40`}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            {[['Nombre / Owner',newP.name,'name'],['Clase (opc.)',newP.class,'class'],['PJs (coma)',newP.chars,'chars'],['Owner real',newP.owner,'owner']].map(([l,v,k])=>(
+              <Input key={k} label={l} value={v} onChange={val=>setNewP(d=>({...d,[k]:val}))}/>
             ))}
           </div>
-          <div className="flex gap-2">
-            <button onClick={handleCreate} disabled={busy} className="font-cinzel uppercase tracking-wider"
-              style={{fontSize:10,padding:'9px 20px',borderRadius:6,background:`linear-gradient(135deg,#8a6020,#c9a84c)`,border:'none',color:VOID,cursor:'pointer',fontWeight:700}}>
-              {busy?'Creando...':'Crear'}
-            </button>
-            <button onClick={()=>setShowNew(false)} className="font-rajdhani"
-              style={{fontSize:12,padding:'9px 16px',borderRadius:6,border:`1px solid ${BORDER}`,background:'transparent',color:'#555',cursor:'pointer'}}>Cancelar</button>
+          <div style={{display:'flex',gap:8,marginTop:8}}>
+            <Btn onClick={handleCreate} disabled={busy}>{busy?'Creando...':'Crear'}</Btn>
+            <Btn onClick={()=>setShowNew(false)} variant='ghost'>Cancelar</Btn>
           </div>
-        </div>
+        </SCard>
       )}
 
       <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
-        <div className="px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
-          <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD}}>{filtered.length} jugadores</p>
+        <div style={{padding:'10px 20px',borderBottom:`1px solid ${BORDER}`,fontFamily:'Cinzel,serif',fontSize:10,color:GD,textTransform:'uppercase',letterSpacing:'0.1em'}}>
+          {filtered.length} jugadores
         </div>
         {filtered.map((p,i)=>(
-          <div key={p.id} style={{borderBottom:i<filtered.length-1?'1px solid #0f0f20':'none',padding:'12px 16px'}}>
-            {editing===p.id ? (
-              <div className="fade-in">
-                <div className="grid grid-cols-2 gap-3 mb-3">
-                  {field('Nombre',(editData.name??p.name),'name')}
-                  {field('Owner',(editData.owner??p.owner??''),'owner')}
-                  {field('PJs (coma)',(editData.chars??p.chars??''),'chars')}
-                  {field('Clase',(editData.class??p.class??''),'class')}
+          <div key={p.id} style={{borderBottom:i<filtered.length-1?`1px solid #0f0f20`:'none',padding:'12px 16px'}}>
+            {editing===p.id?(
+              <div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:8}}>
+                  {[['Nombre',(editData.name??p.name),'name'],['Owner',(editData.owner??p.owner??''),'owner'],['PJs',(editData.chars??p.chars??''),'chars'],['Clase',(editData.class??p.class??''),'class']].map(([l,v,k])=>(
+                    <Input key={k} label={l} value={String(v)} onChange={val=>setEditData((d:any)=>({...d,[k]:val}))}/>
+                  ))}
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={()=>saveEdit(p.id)} disabled={busy} className="font-cinzel uppercase tracking-wider"
-                    style={{fontSize:10,padding:'7px 16px',borderRadius:6,background:`${G}20`,border:`1px solid ${GD}`,color:G,cursor:'pointer'}}>
-                    {busy?'Guardando...':'✓ Guardar'}
-                  </button>
-                  <button onClick={()=>setEditing(null)} className="font-rajdhani"
-                    style={{fontSize:12,padding:'7px 12px',borderRadius:6,border:`1px solid ${BORDER}`,background:'transparent',color:'#555',cursor:'pointer'}}>Cancelar</button>
+                <div style={{display:'flex',gap:8}}>
+                  <Btn onClick={()=>saveEdit(p.id)} disabled={busy} size='sm'>{busy?'Guardando...':'✓ Guardar'}</Btn>
+                  <Btn onClick={()=>setEditing(null)} variant='ghost' size='sm'>Cancelar</Btn>
                 </div>
               </div>
-            ) : (
-              <div className="flex items-center justify-between">
+            ):(
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
                 <div>
-                  <span className="font-cinzel font-semibold" style={{color:'#e8e0d0',fontSize:14}}>{p.name}</span>
-                  {p.owner&&p.owner!==p.name&&<span className="font-rajdhani ml-2" style={{fontSize:12,color:'#666'}}>({p.owner})</span>}
-                  {p.chars&&<div className="font-rajdhani mt-0.5" style={{fontSize:11,color:'#555'}}>{p.chars}</div>}
+                  <span style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:14}}>{p.name}</span>
+                  {p.chars&&<div style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#666',marginTop:2}}>{p.chars}</div>}
                 </div>
-                <button onClick={()=>{setEditing(p.id);setEditData({})}}
-                  className="font-cinzel uppercase tracking-wider"
-                  style={{fontSize:9,padding:'5px 12px',borderRadius:5,border:`1px solid ${BORDER}`,background:'transparent',color:'#888',cursor:'pointer'}}>
-                  ✏ Editar
-                </button>
+                <Btn onClick={()=>{setEditing(p.id);setEditData({})}} variant='ghost' size='sm'>✏ Editar</Btn>
               </div>
             )}
           </div>
@@ -142,124 +339,36 @@ function PlayersTab({showToast}:{showToast:(t:TT)=>void}) {
   )
 }
 
-// ── Claims Tab ────────────────────────────────────────────────
-function ClaimsTab({showToast}:{showToast:(t:TT)=>void}) {
-  const [claims, setClaims] = useState<Claim[]>([])
-  const [players, setPlayers] = useState<{id:string;name:string;total_points:number}[]>([])
-  const [selPlayer, setSelPlayer] = useState('')
-  const [note, setNote] = useState('')
-  const [busy, setBusy] = useState(false)
-
-  async function load() {
-    setClaims(await getClaims())
-    const {data} = await supabase.from('public_leaderboard').select('id,name,total_points').gte('total_points',0).order('name')
-    setPlayers(data??[])
-  }
-  useEffect(()=>{load()},[])
-
-  async function handleApprove(id:string) {
-    setBusy(true)
-    try{await approveClaim(id);showToast({msg:'Claim aprobado',type:'ok'});load()}
-    catch(e:any){showToast({msg:'Error',type:'err'})}
-    finally{setBusy(false)}
-  }
-
-  async function handleCreate() {
-    if(!selPlayer){showToast({msg:'Selecciona un jugador',type:'warn'});return}
-    setBusy(true)
-    try{await processClaim(selPlayer,note);showToast({msg:'Claim registrado',type:'ok'});setSelPlayer('');setNote('');load()}
-    catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
-    finally{setBusy(false)}
-  }
-
-  const pending = claims.filter(c=>!c.approved)
-  const approved = claims.filter(c=>c.approved)
-
-  return (
-    <div style={{maxWidth:720}}>
-      {/* Register claim manually */}
-      <div className="rounded-xl p-5 mb-5" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-        <p className="font-cinzel uppercase tracking-widest mb-4" style={{fontSize:10,color:GD}}>Registrar Claim Manualmente</p>
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <div>
-            <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>Jugador</p>
-            <select value={selPlayer} onChange={e=>setSelPlayer(e.target.value)}
-              className="font-rajdhani w-full" style={{background:VOID,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:13}}>
-              <option value="">— Seleccionar —</option>
-              {players.map(p=><option key={p.id} value={p.id}>{p.name} ({p.total_points} pts)</option>)}
-            </select>
-          </div>
-          <div>
-            <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>Notas (opcional)</p>
-            <input value={note} onChange={e=>setNote(e.target.value)}
-              className="font-rajdhani w-full" style={{background:VOID,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:13}}/>
-          </div>
-        </div>
-        <button onClick={handleCreate} disabled={busy} className="font-cinzel uppercase tracking-wider"
-          style={{fontSize:10,padding:'9px 20px',borderRadius:6,background:`${G}20`,border:`1px solid ${GD}`,color:G,cursor:'pointer'}}>
-          {busy?'Registrando...':'+ Registrar Claim'}
-        </button>
-      </div>
-
-      {/* Pending */}
-      {pending.length>0 && (
-        <div className="rounded-xl overflow-hidden mb-4" style={{background:CARD,border:'1px solid #a0600040'}}>
-          <div className="px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
-            <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:'#d09020'}}>⏳ Pendientes de aprobación — {pending.length}</p>
-          </div>
-          {pending.map((c,i)=>(
-            <div key={c.id} className="flex items-center justify-between px-5 py-3"
-              style={{borderBottom:i<pending.length-1?'1px solid #0f0f20':'none'}}>
-              <div>
-                <p className="font-cinzel font-semibold" style={{color:'#e8e0d0',fontSize:14}}>{(c as any).players?.name}</p>
-                {c.notes&&<p className="font-rajdhani" style={{fontSize:11,color:'#555'}}>{c.notes}</p>}
-                <p className="font-rajdhani" style={{fontSize:11,color:'#555'}}>{c.claimed_at}</p>
-              </div>
-              <button onClick={()=>handleApprove(c.id)} disabled={busy}
-                className="font-cinzel uppercase tracking-wider"
-                style={{fontSize:9,padding:'7px 14px',borderRadius:6,background:'#0a2a1a',border:'1px solid #20a060',color:'#40d090',cursor:'pointer'}}>
-                ✓ Aprobar
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Approved */}
-      <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
-        <div className="px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
-          <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD}}>✓ Aprobados — {approved.length}</p>
-        </div>
-        {approved.length===0 ? (
-          <p className="font-rajdhani text-center" style={{padding:'24px',color:'#333',fontSize:13}}>Sin claims aprobados</p>
-        ) : approved.slice(0,30).map((c,i)=>(
-          <div key={c.id} className="flex items-center justify-between px-5 py-3"
-            style={{borderBottom:i<Math.min(approved.length,30)-1?'1px solid #0f0f20':'none'}}>
-            <span className="font-cinzel" style={{color:'#e8e0d0',fontSize:13}}>{(c as any).players?.name}</span>
-            <span className="font-rajdhani" style={{fontSize:12,color:'#40d0a0'}}>✓ {c.claimed_at}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ── Upload Module ─────────────────────────────────────────────
-function UploadModule({showToast}:{showToast:(t:TT)=>void}) {
+// ══════════════════════════════════════════════════════════════
+// ─── CARGAR MAZE TAB ──────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+function UploadTab({showToast}:{showToast:(t:TT)=>void}) {
   const [mazeType,setMazeType]=useState<MazeType>('BD')
   const [adminPts,setAdminPts]=useState(0)
   const [eventPts,setEventPts]=useState(0)
   const [rawText,setRawText]=useState('')
   const [imageFile,setImageFile]=useState<File|null>(null)
-  const [parsed,setParsed]=useState<{name:string;points:number}[]>([])
+  const [parsed,setParsed]=useState<{name:string;points:number;isSupport:boolean}[]>([])
   const [busy,setBusy]=useState(false)
   const [ocrBusy,setOcrBusy]=useState(false)
+  const [sessionDate,setSessionDate]=useState(new Date().toISOString().split('T')[0])
   const fileRef=useRef<HTMLInputElement>(null)
   const share=calcPointShare(5,adminPts,eventPts,parsed.length)
 
+  function parseWithSupport(text:string) {
+    const lines = text.split(/\n/).map(l=>l.trim()).filter(Boolean)
+    return lines.map(line => {
+      const isSupport = line.includes('*')
+      const clean = line.replace(/\*/g,'')
+      const match = clean.match(/^([A-Za-z0-9_\s]+?)[\s:\-]+(\d+(?:\.\d+)?)\s*(?:pts?)?$/i)
+      if (!match) return null
+      return { name: match[1].trim(), points: parseFloat(match[2]), isSupport }
+    }).filter(Boolean) as {name:string;points:number;isSupport:boolean}[]
+  }
+
   async function handleOCR(){
     if(!imageFile)return;setOcrBusy(true)
-    try{const t=await runOCR(imageFile);setRawText(t);setParsed(parseMazeReport(t));showToast({msg:'OCR completado',type:'ok'})}
+    try{const t=await runOCR(imageFile);setRawText(t);setParsed(parseWithSupport(t));showToast({msg:'OCR completado',type:'ok'})}
     catch{showToast({msg:'OCR falló — usa pegado de texto',type:'err'})}
     finally{setOcrBusy(false)}
   }
@@ -268,12 +377,21 @@ function UploadModule({showToast}:{showToast:(t:TT)=>void}) {
     if(parsed.length===0){showToast({msg:'Sin datos',type:'warn'});return}
     setBusy(true)
     try{
-      const session=await createMazeSession({maze_type:mazeType,total_points:5,admin_points:adminPts,event_points:eventPts,session_date:new Date().toISOString().split('T')[0],raw_report:rawText})
+      const session=await createMazeSession({maze_type:mazeType,total_points:5,admin_points:adminPts,event_points:eventPts,session_date:sessionDate,raw_report:rawText})
       for(const entry of parsed){
         const {data:pl}=await supabase.from('players').select('id').ilike('name',entry.name).limit(1)
-        if(pl&&pl.length>0) await addPlayerPoints(pl[0].id,session.id,entry.points)
-        else await supabase.from('point_alerts').insert({raw_name:entry.name,session_id:session.id})
+        if(pl&&pl.length>0){
+          await addPlayerPoints(pl[0].id,session.id,entry.points)
+          // Record attendance
+          await supabase.from('maze_attendance').upsert({
+            session_id:session.id, player_id:pl[0].id,
+            attended:true, points_earned:entry.points, is_support:entry.isSupport
+          })
+        } else {
+          await supabase.from('point_alerts').insert({raw_name:entry.name,session_id:session.id})
+        }
       }
+      await updateReportDate(mazeType, sessionDate)
       showToast({msg:'Sesión guardada',type:'ok'});setRawText('');setParsed([]);setImageFile(null)
       if(fileRef.current)fileRef.current.value=''
     }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
@@ -282,351 +400,380 @@ function UploadModule({showToast}:{showToast:(t:TT)=>void}) {
 
   return (
     <div style={{maxWidth:700}}>
-      <div className="rounded-xl p-5 mb-4" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-        <p className="font-cinzel uppercase tracking-widest mb-4" style={{fontSize:10,color:GD}}>Tipo de Maze</p>
-        <div className="flex gap-3 mb-4">
-          {([['BD','🐉 Black Dragon','#e05050'],['FV','❄️ Frozen Ville','#4ab8f0']] as const).map(([k,label,col])=>(
-            <button key={k} onClick={()=>setMazeType(k as MazeType)} className="font-cinzel uppercase tracking-wider flex-1"
-              style={{fontSize:11,padding:'10px',borderRadius:8,border:`1px solid ${mazeType===k?col:BORDER}`,background:mazeType===k?`${col}20`:'transparent',color:mazeType===k?col:'#555',cursor:'pointer'}}>
-              {label}
+      <SCard title="Configuración del Maze">
+        <div style={{display:'flex',gap:8,marginBottom:16}}>
+          {(['BD','FV'] as MazeType[]).map(t=>(
+            <button key={t} onClick={()=>setMazeType(t)} style={{flex:1,padding:'10px',borderRadius:8,border:`1px solid ${mazeType===t?(t==='BD'?'#e05050':'#4ab8f0'):BORDER}`,background:mazeType===t?`${t==='BD'?'#e05050':'#4ab8f0'}20`:'transparent',color:mazeType===t?(t==='BD'?'#e05050':'#4ab8f0'):'#666',cursor:'pointer',fontFamily:'Cinzel,serif',fontSize:11,textTransform:'uppercase',letterSpacing:'0.1em'}}>
+              {t==='BD'?'🐉 Black Dragon':'❄️ Frozen Ville'}
             </button>
           ))}
         </div>
-        <div className="grid grid-cols-2 gap-4 mb-3">
-          {[['Puntos Admin (oculto al público)',adminPts,setAdminPts],['Puntos Guild Event',eventPts,setEventPts]].map(([label,val,setter]:any)=>(
-            <div key={label}>
-              <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>{label}</p>
-              <input type="number" min={0} max={5} step={0.1} value={val} onChange={e=>setter(parseFloat(e.target.value)||0)}
-                className="font-rajdhani w-full" style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:14}}/>
-            </div>
-          ))}
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:12,marginBottom:12}}>
+          <Input label="Fecha del Maze" value={sessionDate} onChange={setSessionDate} type="date"/>
+          <Input label="Pts Admin" value={String(adminPts)} onChange={v=>setAdminPts(parseFloat(v)||0)} type="number"/>
+          <Input label="Pts Guild Event" value={String(eventPts)} onChange={v=>setEventPts(parseFloat(v)||0)} type="number"/>
         </div>
         {parsed.length>0&&(
-          <div className="rounded-lg p-3" style={{background:DEEP,border:`1px solid ${BORDER}`}}>
-            <span className="font-rajdhani" style={{color:'#888',fontSize:13}}>Pts/participante: </span>
-            <span className="font-cinzel font-bold" style={{color:G,fontSize:20}}>{share}</span>
-            <span className="font-rajdhani ml-2" style={{color:'#555',fontSize:12}}>({parsed.length} participantes)</span>
+          <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'10px 14px'}}>
+            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:13}}>Pts/participante: </span>
+            <span style={{fontFamily:'Cinzel,serif',fontWeight:700,fontSize:20,color:G}}>{share}</span>
+            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12,marginLeft:8}}>({parsed.length} participantes — {parsed.filter(p=>p.isSupport).length} apoyos mágicos ★)</span>
           </div>
         )}
-      </div>
+      </SCard>
 
-      <div className="rounded-xl p-5 mb-4" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-        <p className="font-cinzel uppercase tracking-widest mb-3" style={{fontSize:10,color:GD}}>📷 Subir Foto del Reporte</p>
-        <input ref={fileRef} type="file" accept="image/*" onChange={e=>setImageFile(e.target.files?.[0]??null)} className="font-rajdhani w-full mb-3" style={{fontSize:13,color:'#888'}}/>
-        {imageFile&&<button onClick={handleOCR} disabled={ocrBusy} className="font-cinzel uppercase tracking-wider"
-          style={{fontSize:10,padding:'8px 18px',borderRadius:6,border:`1px solid ${GD}80`,background:`${G}15`,color:G,cursor:'pointer',opacity:ocrBusy?0.6:1}}>
-          {ocrBusy?'Procesando...':'Leer con OCR'}
-        </button>}
-      </div>
+      <SCard title="📷 Subir Foto del Reporte">
+        <input ref={fileRef} type="file" accept="image/*" onChange={e=>setImageFile(e.target.files?.[0]??null)} style={{fontSize:13,color:'#888',marginBottom:12,display:'block'}}/>
+        {imageFile&&<Btn onClick={handleOCR} disabled={ocrBusy}>{ocrBusy?'Procesando...':'Leer con OCR'}</Btn>}
+      </SCard>
 
-      <div className="rounded-xl p-5 mb-4" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-        <p className="font-cinzel uppercase tracking-widest mb-1" style={{fontSize:10,color:GD}}>📋 Pegado Rápido</p>
-        <p className="font-rajdhani mb-2" style={{fontSize:12,color:'#555'}}>Formato: NombrePJ 3 / NombrePJ: 2.5</p>
-        <textarea rows={7} value={rawText} onChange={e=>setRawText(e.target.value)} placeholder={"Morgan 3\nDragonSlayer 2"} className="font-rajdhani w-full"
-          style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'9px 12px',color:'#e8e0d0',fontSize:13,fontFamily:'monospace',resize:'vertical'}}/>
-        <button onClick={()=>setParsed(parseMazeReport(rawText))} className="font-cinzel uppercase tracking-wider mt-3"
-          style={{fontSize:10,padding:'8px 16px',borderRadius:6,border:`1px solid ${BORDER}`,background:'transparent',color:'#888',cursor:'pointer'}}>
-          Parsear texto
-        </button>
-      </div>
+      <SCard title="📋 Pegado Rápido de Texto">
+        <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666',marginBottom:8}}>
+          Formato: NombrePJ 3 / NombrePJ: 2.5 — Apoyos mágicos: Morgan* 3 (con asterisco)
+        </div>
+        <textarea rows={8} value={rawText} onChange={e=>setRawText(e.target.value)}
+          placeholder={"Morgan 3\nDragonSlayer* 2\nIceMage 1.5"}
+          style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'9px 12px',color:'#e8e0d0',fontSize:13,fontFamily:'monospace',resize:'vertical',boxSizing:'border-box'}}/>
+        <div style={{marginTop:8}}>
+          <Btn onClick={()=>setParsed(parseWithSupport(rawText))} variant='ghost'>Parsear texto</Btn>
+        </div>
+      </SCard>
 
       {parsed.length>0&&(
-        <div className="rounded-xl overflow-hidden mb-4 fade-in" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-          <div className="px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
-            <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD}}>Vista previa — {parsed.length} jugadores</p>
-          </div>
+        <SCard title={`Vista previa — ${parsed.length} jugadores`}>
           {parsed.map((e,i)=>(
-            <div key={i} className="flex justify-between px-5 py-2" style={{borderBottom:i<parsed.length-1?'1px solid #0f0f20':'none'}}>
-              <span className="font-rajdhani" style={{color:'#e8e0d0',fontSize:14}}>{e.name}</span>
-              <span className="font-cinzel font-bold" style={{color:G,fontSize:14}}>{e.points} pts</span>
+            <div key={i} style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:i<parsed.length-1?`1px solid #0f0f20`:'none'}}>
+              <span style={{fontFamily:'Rajdhani,sans-serif',color:'#e8e0d0',fontSize:14}}>
+                {e.name} {e.isSupport&&<span style={{color:'#f0a020',fontSize:12}}>★ Apoyo mágico</span>}
+              </span>
+              <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:14}}>{e.points} pts</span>
             </div>
           ))}
-          <div className="p-5">
-            <button onClick={handleSubmit} disabled={busy} className="font-cinzel uppercase tracking-widest w-full"
-              style={{fontSize:12,padding:'13px',borderRadius:8,background:busy?'#2a2010':`linear-gradient(135deg,#8a6020,#c9a84c)`,border:'none',color:busy?GD:VOID,cursor:busy?'not-allowed':'pointer',fontWeight:700}}>
-              {busy?'Guardando...':'✓ Guardar Sesión'}
+          <div style={{marginTop:16}}>
+            <Btn onClick={handleSubmit} disabled={busy} variant='gold'>{busy?'Guardando...':'✓ Guardar Sesión'}</Btn>
+          </div>
+        </SCard>
+      )}
+
+      {/* Pending alerts */}
+      <AlertsInline/>
+    </div>
+  )
+}
+
+function AlertsInline() {
+  const [alerts,setAlerts]=useState<PointAlert[]>([])
+  const [sugg,setSugg]=useState<Record<string,any[]>>({})
+  useEffect(()=>{
+    getPendingAlerts().then(a=>{
+      setAlerts(a)
+      a.forEach(al=>suggestPlayerName(al.raw_name).then(s=>setSugg(p=>({...p,[al.id]:s}))))
+    })
+  },[])
+  if(alerts.length===0) return null
+  return (
+    <SCard title={`⚠ Nombres no encontrados — ${alerts.length}`} color='#a0600040'>
+      {alerts.map(al=>(
+        <div key={al.id} style={{marginBottom:12,paddingBottom:12,borderBottom:`1px solid #1a1a3a`}}>
+          <div style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:14,marginBottom:6}}>"{al.raw_name}"</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:6}}>
+            {(sugg[al.id]??[]).map((s:any)=>(
+              <button key={s.name} onClick={()=>resolveAlert(al.id,'link',s.name).then(()=>setAlerts(a=>a.filter(x=>x.id!==al.id)))}
+                style={{fontSize:12,padding:'4px 10px',borderRadius:5,border:`1px solid ${BORDER}`,background:CARD,color:'#e8e0d0',cursor:'pointer'}}>
+                {s.name} <span style={{color:'#555',fontSize:10}}>({Math.round(s.similarity*100)}%)</span>
+              </button>
+            ))}
+            <button onClick={()=>createPlayer(al.raw_name).then(()=>resolveAlert(al.id,'create')).then(()=>setAlerts(a=>a.filter(x=>x.id!==al.id)))}
+              style={{fontSize:11,padding:'4px 10px',borderRadius:5,border:`1px solid ${GD}`,background:`${G}15`,color:G,cursor:'pointer',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.08em'}}>
+              + Crear PJ
             </button>
           </div>
         </div>
-      )}
-    </div>
+      ))}
+    </SCard>
   )
 }
 
-// ── Alert Card ─────────────────────────────────────────────────
-function AlertCard({alert,onResolved}:{alert:PointAlert;onResolved:()=>void}) {
-  const [sugg,setSugg]=useState<{name:string;similarity:number}[]>([])
-  useEffect(()=>{suggestPlayerName(alert.raw_name).then(setSugg)},[alert.raw_name])
-  return (
-    <div className="rounded-xl p-4 mb-3" style={{background:'#1a0d00',border:'1px solid #a0600040'}}>
-      <p className="font-cinzel uppercase tracking-widest mb-1" style={{fontSize:9,color:'#d09020'}}>⚠ Nombre no encontrado</p>
-      <p className="font-cinzel font-bold mb-3" style={{fontSize:18,color:'#e8e0d0'}}>"{alert.raw_name}"</p>
-      {sugg.length>0&&<div className="flex flex-wrap gap-2 mb-3">
-        {sugg.map(s=><button key={s.name} onClick={()=>resolveAlert(alert.id,'link',s.name).then(onResolved)}
-          className="font-rajdhani" style={{fontSize:13,padding:'5px 12px',borderRadius:6,border:`1px solid ${BORDER}`,background:CARD,color:'#e8e0d0',cursor:'pointer'}}>
-          {s.name} <span style={{color:'#555',fontSize:11}}>({Math.round(s.similarity*100)}%)</span>
-        </button>)}
-      </div>}
-      <div className="flex gap-2">
-        <button onClick={()=>createPlayer(alert.raw_name).then(()=>resolveAlert(alert.id,'create')).then(onResolved)}
-          className="font-cinzel uppercase tracking-wider"
-          style={{fontSize:10,padding:'7px 14px',borderRadius:6,border:`1px solid ${GD}80`,background:`${G}15`,color:G,cursor:'pointer'}}>
-          + Crear PJ
-        </button>
-        <button onClick={()=>resolveAlert(alert.id,'link').then(onResolved)}
-          className="font-rajdhani" style={{fontSize:12,padding:'7px 14px',borderRadius:6,border:`1px solid ${BORDER}`,background:'transparent',color:'#555',cursor:'pointer'}}>
-          Ignorar
-        </button>
-      </div>
-    </div>
-  )
-}
+// ══════════════════════════════════════════════════════════════
+// ─── CLAIMS TAB ───────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+function ClaimsTab({showToast}:{showToast:(t:TT)=>void}) {
+  const [claims,setClaims]=useState<Claim[]>([])
+  const [players,setPlayers]=useState<{id:string;name:string;available_points:number}[]>([])
+  const [selPlayer,setSelPlayer]=useState('')
+  const [mazeType,setMazeType]=useState<'BD'|'FV'>('BD')
+  const [note,setNote]=useState('')
+  const [busy,setBusy]=useState(false)
 
-// ── Users Tab ──────────────────────────────────────────────────
-function UsersTab({showToast}:{showToast:(t:TT)=>void}) {
-  const [users,setUsers]=useState<any[]>([])
-
-  async function loadUsers(){
-    const{data}=await supabase.from('admin_profiles')
-      .select('*, admin_email_map(email)')
-      .order('created_at',{ascending:false})
-    setUsers(data??[])
+  async function load(){
+    setClaims(await getClaims())
+    const{data}=await supabase.from('public_leaderboard').select('id,name,available_points').order('name')
+    setPlayers(data??[])
   }
-  useEffect(()=>{loadUsers()},[])
+  useEffect(()=>{load()},[])
+
+  async function handleCreate(){
+    if(!selPlayer){showToast({msg:'Selecciona un jugador',type:'warn'});return}
+    setBusy(true)
+    try{
+      await processClaim(selPlayer,`${mazeType}: ${note||'Claim registrado por admin'}`)
+      showToast({msg:'Claim registrado — se restaron 5 pts',type:'ok'});setSelPlayer('');setNote('');load()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    finally{setBusy(false)}
+  }
+
+  const pending=claims.filter(c=>!c.approved)
+  const approved=claims.filter(c=>c.approved)
+  const selP=players.find(p=>p.id===selPlayer)
 
   return (
     <div style={{maxWidth:720}}>
-      <div className="rounded-xl p-5 mb-4" style={{background:CARD,border:`1px solid ${G}30`}}>
-        <p className="font-cinzel uppercase tracking-widest mb-3" style={{fontSize:10,color:GD}}>Cómo crear un nuevo Admin / Manager</p>
-        <p className="font-rajdhani mb-4" style={{fontSize:13,color:'#aaa',lineHeight:1.8}}>
-          Los usuarios entran con <strong style={{color:'#e8e0d0'}}>username</strong> y contraseña (no con email).<br/>
-          Sigue estos pasos para crear un nuevo admin:
-        </p>
-        <div className="space-y-3">
-          {[
-            ['1','Supabase → Authentication → Users → Add user','Ingresa cualquier email (interno) y la contraseña. Activa Auto Confirm.'],
-            ['2','Copia el UID del usuario creado','Aparece en la columna UID de la lista de usuarios.'],
-            ['3','Ejecuta este SQL (reemplaza los valores):',''],
-          ].map(([n,title,sub])=>(
-            <div key={n} className="flex gap-3 items-start">
-              <span className="font-cinzel font-bold flex-shrink-0" style={{fontSize:13,color:G,width:20}}>{n}.</span>
-              <div>
-                <p className="font-rajdhani font-bold" style={{fontSize:13,color:'#e8e0d0'}}>{title}</p>
-                {sub&&<p className="font-rajdhani" style={{fontSize:12,color:'#777'}}>{sub}</p>}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="rounded-lg p-4 mt-4" style={{background:VOID,border:`1px solid ${BORDER}`,fontFamily:'monospace',fontSize:12,color:G,lineHeight:1.9}}>
-          {`-- 1. Perfil de admin\nINSERT INTO admin_profiles (id, username, role)\nVALUES (\n  'PEGA-EL-UUID-AQUI',\n  'el_username',        -- así va a entrar el usuario\n  'manager'             -- o 'superadmin'\n);\n\n-- 2. Mapa de email (para el login por username)\nINSERT INTO admin_email_map (user_id, email, username)\nVALUES (\n  'PEGA-EL-UUID-AQUI',\n  'el-email@ejemplo.com',  -- el email que pusiste en Auth\n  'el_username'\n);`}
-        </div>
-      </div>
-      {users.length>0&&(
-        <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
-          <div className="px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
-            <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD}}>Admins registrados — {users.length}</p>
+      <SCard title="Registrar Claim" color={`${G}40`}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12}}>
+          <div>
+            <div style={{fontSize:10,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>Jugador</div>
+            <select value={selPlayer} onChange={e=>setSelPlayer(e.target.value)}
+              style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'8px 12px',color:'#e8e0d0',fontSize:14,fontFamily:'Rajdhani,sans-serif'}}>
+              <option value="">— Seleccionar —</option>
+              {players.map(p=><option key={p.id} value={p.id}>{p.name} ({f2(p.available_points)} pts)</option>)}
+            </select>
           </div>
-          {users.map((u,i)=>(
-            <div key={u.id} className="flex items-center justify-between px-5 py-3"
-              style={{borderBottom:i<users.length-1?'1px solid #0f0f20':'none'}}>
+          <div>
+            <div style={{fontSize:10,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>Tipo de Maze</div>
+            <div style={{display:'flex',gap:6}}>
+              {(['BD','FV'] as const).map(t=>(
+                <button key={t} onClick={()=>setMazeType(t)} style={{flex:1,padding:'8px',borderRadius:6,border:`1px solid ${mazeType===t?(t==='BD'?'#e05050':'#4ab8f0'):BORDER}`,background:mazeType===t?`${t==='BD'?'#e05050':'#4ab8f0'}20`:'transparent',color:mazeType===t?(t==='BD'?'#e05050':'#4ab8f0'):'#666',cursor:'pointer',fontFamily:'Cinzel,serif',fontSize:10,textTransform:'uppercase'}}>
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        {selP&&(
+          <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'10px 14px',marginBottom:12}}>
+            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:13}}>Disponible: </span>
+            <span style={{fontFamily:'Cinzel,serif',fontWeight:700,fontSize:18,color:'#e05050'}}>{f2(selP.available_points)}</span>
+            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12,marginLeft:8}}>→ después del claim: {f2(selP.available_points-5)}</span>
+            {selP.available_points<5&&<div style={{fontFamily:'Rajdhani,sans-serif',color:'#e04040',fontSize:12,marginTop:4}}>⚠ Puntos insuficientes (mínimo 5)</div>}
+          </div>
+        )}
+        <Input label="Notas (opcional)" value={note} onChange={setNote} placeholder="Claim de Black Dragon..."/>
+        <Btn onClick={handleCreate} disabled={busy||!selPlayer||(selP?selP.available_points<5:false)}>
+          {busy?'Registrando...':'+ Registrar Claim (-5 pts)'}
+        </Btn>
+      </SCard>
+
+      {pending.length>0&&(
+        <div style={{background:CARD,border:'1px solid #a0600040',borderRadius:12,overflow:'hidden',marginBottom:16}}>
+          <div style={{padding:'10px 20px',borderBottom:`1px solid ${BORDER}`,fontFamily:'Cinzel,serif',fontSize:10,color:'#d09020',textTransform:'uppercase'}}>⏳ Pendientes — {pending.length}</div>
+          {pending.map((c,i)=>(
+            <div key={c.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'11px 20px',borderBottom:i<pending.length-1?`1px solid #0f0f20`:'none'}}>
               <div>
-                <span className="font-cinzel font-semibold" style={{color:'#e8e0d0',fontSize:14}}>{u.username}</span>
-                {u.admin_email_map?.email&&<span className="font-rajdhani ml-2" style={{fontSize:11,color:'#555'}}>{u.admin_email_map.email}</span>}
+                <div style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:13}}>{(c as any).players?.name}</div>
+                {c.notes&&<div style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#666'}}>{c.notes}</div>}
+                <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555'}}>{c.claimed_at}</div>
               </div>
-              <span className="font-cinzel uppercase tracking-wider"
-                style={{fontSize:9,padding:'3px 10px',borderRadius:20,border:`1px solid ${u.role==='superadmin'?G:BORDER}`,color:u.role==='superadmin'?G:'#888'}}>
-                {u.role}
-              </span>
+              <Btn onClick={()=>approveClaim(c.id).then(()=>load()).then(()=>showToast({msg:'Claim aprobado',type:'ok'}))} variant='green' size='sm'>✓ Aprobar</Btn>
             </div>
           ))}
         </div>
       )}
+
+      <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
+        <div style={{padding:'10px 20px',borderBottom:`1px solid ${BORDER}`,fontFamily:'Cinzel,serif',fontSize:10,color:GD,textTransform:'uppercase'}}>✓ Aprobados — {approved.length}</div>
+        {approved.slice(0,20).map((c,i)=>(
+          <div key={c.id} style={{display:'flex',justifyContent:'space-between',padding:'9px 20px',borderBottom:i<Math.min(approved.length,20)-1?`1px solid #0f0f20`:'none'}}>
+            <span style={{fontFamily:'Cinzel,serif',color:'#e8e0d0',fontSize:13}}>{(c as any).players?.name}</span>
+            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#40d0a0',fontSize:12}}>✓ {c.claimed_at} · {c.notes?.split(':')[0]}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
 
-// ── Main Admin ─────────────────────────────────────────────────
-export default function AdminPage() {
-  const [tab,setTab]=useState<Tab>('rankings')
-  const [session,setSession]=useState<any>(null)
-  const [loading,setLoading]=useState(true)
-  const [lb,setLb]=useState<LeaderboardEntry[]>([])
-  const [alerts,setAlerts]=useState<PointAlert[]>([])
-  const [toast,setToast]=useState<TT|null>(null)
-  const [username,setUsername]=useState(''), [password,setPassword]=useState(''), [authErr,setAuthErr]=useState('')
-  const showToast=(t:TT)=>setToast(t)
+// ══════════════════════════════════════════════════════════════
+// ─── CONTABILIDAD TAB ─────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+function ContabilidadTab({showToast}:{showToast:(t:TT)=>void}) {
+  const [snap,setSnap]=useState<any>(null)
+  const [history,setHistory]=useState<any[]>([])
+  const [newSnap,setNewSnap]=useState({loots_banco:0,loots_fuera:0,loots_events:0,loots_claims:0,keys_count:0,gold_coins:0,bnotes:0,bd_soul:0,bd_eye:0,bd_heart:0,white_cat:0,green_cat:0,yellow_cat:0,red_cat:0,notes:''})
+  const [busy,setBusy]=useState(false)
 
-  useEffect(()=>{
-    supabase.auth.getSession().then(({data})=>{setSession(data.session);setLoading(false)})
-    supabase.auth.onAuthStateChange((_,s)=>setSession(s))
-  },[])
-  useEffect(()=>{
-    if(!session)return
-    getAdminLeaderboard().then(setLb)
-    getPendingAlerts().then(setAlerts)
-  },[session])
+  async function load(){
+    const{data}=await supabase.from('bank_snapshot').select('*').order('created_at',{ascending:false}).limit(10)
+    setSnap((data??[])[0]??null);setHistory(data??[])
+  }
+  useEffect(()=>{load()},[])
 
-  async function handleLogin(e:React.FormEvent){
-    e.preventDefault(); setAuthErr('')
-    try {
-      // Buscar en admin_email_map por username (ilike = case insensitive)
-      const {data:emailRow, error:eErr} = await supabase
-        .from('admin_email_map')
-        .select('email, username')
-        .ilike('username', username.trim())
-        .single()
-      if (eErr || !emailRow) { setAuthErr('Usuario no encontrado'); return }
-      // Login con el email real de Supabase Auth
-      const {error:loginErr} = await supabase.auth.signInWithPassword({
-        email: emailRow.email, password
-      })
-      if (loginErr) setAuthErr('Contraseña incorrecta')
-    } catch(err:any) {
-      setAuthErr('Error al iniciar sesión')
-    }
+  async function handleSave(){
+    setBusy(true)
+    try{
+      await supabase.from('bank_snapshot').insert({...newSnap,snapshot_date:new Date().toISOString().split('T')[0]})
+      showToast({msg:'Snapshot guardado',type:'ok'});load()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    finally{setBusy(false)}
   }
 
-  if(loading) return <div style={{minHeight:'100vh',background:VOID,display:'flex',alignItems:'center',justifyContent:'center'}}><div className="font-cinzel" style={{color:GD}}>Cargando...</div></div>
-
-  if(!session) return (
-    <div style={{minHeight:'100vh',background:VOID,display:'flex',alignItems:'center',justifyContent:'center'}}>
-      <div style={{width:'100%',maxWidth:380}}>
-        <div className="text-center mb-8">
-          <div style={{fontSize:44,marginBottom:10}}>🐉</div>
-          <h1 className="font-cinzel font-black text-gold-gradient" style={{fontSize:24,letterSpacing:'0.12em'}}>THE ORIGINALS</h1>
-          <p className="font-cinzel uppercase tracking-widest mt-1" style={{fontSize:9,color:GD}}>Admin Panel</p>
-        </div>
-        <form onSubmit={handleLogin} style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,padding:24}}>
-          <div style={{marginBottom:14}}>
-            <p className="font-cinzel uppercase tracking-widest mb-1" style={{fontSize:9,color:GD}}>Usuario</p>
-            <input type="text" value={username} onChange={e=>setUsername(e.target.value)} required
-              autoComplete="username" placeholder="jcwhite"
-              className="font-rajdhani w-full"
-              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'10px 14px',color:'#e8e0d0',fontSize:15}}/>
-          </div>
-          <div style={{marginBottom:14}}>
-            <p className="font-cinzel uppercase tracking-widest mb-1" style={{fontSize:9,color:GD}}>Contraseña</p>
-            <input type="password" value={password} onChange={e=>setPassword(e.target.value)} required
-              autoComplete="current-password"
-              className="font-rajdhani w-full"
-              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'10px 14px',color:'#e8e0d0',fontSize:15}}/>
-          </div>
-          {authErr&&<p className="font-rajdhani mb-3" style={{color:'#e04040',fontSize:13}}>{authErr}</p>}
-          <button type="submit" className="font-cinzel uppercase tracking-widest w-full"
-            style={{fontSize:12,padding:14,borderRadius:8,background:`linear-gradient(135deg,#8a6020,#c9a84c)`,border:'none',color:VOID,cursor:'pointer',fontWeight:700}}>
-            Ingresar
-          </button>
-        </form>
-        <div className="text-center mt-4">
-          <a href="/dashboard" className="font-rajdhani" style={{color:'#555',fontSize:13}}>← Dashboard público</a>
-        </div>
-      </div>
-    </div>
-  )
-
-  const pendingAlerts=alerts.filter(a=>!a.resolved).length
-  const TABS=[
-    {key:'rankings'  as Tab,label:'📊 Rankings'},
-    {key:'players'   as Tab,label:'👥 Jugadores'},
-    {key:'upload'    as Tab,label:'📤 Cargar Maze'},
-    {key:'claims'    as Tab,label:'🏆 Claims'},
-    {key:'fv'        as Tab,label:'❄️ Frozen Ville'},
-    {key:'anuncios'  as Tab,label:'📢 Anuncios'},
-    {key:'alerts'    as Tab,label:'⚠ Alertas',badge:pendingAlerts},
-    {key:'events'    as Tab,label:'🎪 Eventos'},
-    {key:'users'     as Tab,label:'🔑 Usuarios'},
-  ]
-
   return (
-    <div style={{minHeight:'100vh',background:VOID}}>
-      {toast&&<Toast t={toast} onClose={()=>setToast(null)}/>}
-      <header style={{background:`linear-gradient(180deg,#0a0010 0%,${VOID} 100%)`,borderBottom:'1px solid #c9a84c30'}}>
-        <div style={{maxWidth:1100,margin:'0 auto',padding:'18px 24px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-          <div className="flex items-center gap-3">
-            <span style={{fontSize:22}}>🐉</span>
-            <span className="font-cinzel font-black text-gold-gradient" style={{fontSize:18,letterSpacing:'0.1em'}}>THE ORIGINALS — ADMIN</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="font-rajdhani" style={{color:'#555',fontSize:13}}>{session.user.email}</span>
-            <button onClick={()=>supabase.auth.signOut()} className="font-cinzel uppercase tracking-widest"
-              style={{fontSize:9,color:'#555',border:`1px solid ${BORDER}`,padding:'6px 12px',borderRadius:5,background:'none',cursor:'pointer'}}>Salir</button>
-          </div>
-        </div>
-      </header>
-      <div style={{maxWidth:1100,margin:'0 auto',padding:'24px'}}>
-        <div className="flex gap-1 mb-6 flex-wrap">
-          {TABS.map(t=>(
-            <button key={t.key} onClick={()=>setTab(t.key)} className="font-cinzel uppercase tracking-wider relative"
-              style={{fontSize:9,padding:'8px 16px',borderRadius:7,cursor:'pointer',border:`1px solid ${tab===t.key?G:BORDER}`,background:tab===t.key?`${G}18`:CARD,color:tab===t.key?G:'#888'}}>
-              {t.label}
-              {t.badge!=null&&t.badge>0&&<span className="font-rajdhani font-bold" style={{position:'absolute',top:-6,right:-6,background:'#d09020',color:VOID,borderRadius:'50%',width:16,height:16,fontSize:10,display:'flex',alignItems:'center',justifyContent:'center'}}>{t.badge}</span>}
-            </button>
+    <div>
+      {/* Current snapshot */}
+      {snap&&(
+        <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:12,marginBottom:20}}>
+          {[
+            {label:'Loots en Banco',val:snap.loots_banco,col:'#4ab8f0'},
+            {label:'Loots Fuera Banco',val:snap.loots_fuera,col:'#f0a020'},
+            {label:'Loots para Claims',val:snap.loots_claims,col:G},
+            {label:'Keys / Llaves',val:snap.keys_count,col:'#40d0a0'},
+            {label:'BD Soul en Banco',val:snap.bd_soul,col:'#c040c0'},
+            {label:'BD Eye en Banco',val:snap.bd_eye,col:'#4080f0'},
+            {label:'BD Heart en Banco',val:snap.bd_heart,col:'#e03030'},
+            {label:'Gold Coins',val:(snap.gold_coins||0).toLocaleString(),col:'#d0d040'},
+          ].map(s=>(
+            <div key={s.label} style={{background:CARD,border:`1px solid ${s.col}30`,borderRadius:10,padding:'12px 14px'}}>
+              <div style={{fontFamily:'Cinzel,serif',fontSize:8,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>{s.label}</div>
+              <div style={{fontFamily:'Cinzel,serif',fontSize:20,fontWeight:700,color:s.col}}>{s.val}</div>
+            </div>
           ))}
         </div>
+      )}
 
-        {tab==='rankings'&&(
-          <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
-            <div className="px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
-              <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD}}>Rankings Admin — con Admin Points</p>
+      <SCard title="Registrar Nuevo Snapshot de Contabilidad">
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:12}}>
+          {[
+            ['Loots en Banco','loots_banco'],['Loots Fuera Banco','loots_fuera'],['Loots para Claims','loots_claims'],
+            ['BD Soul','bd_soul'],['BD Eye','bd_eye'],['BD Heart','bd_heart'],
+            ['Cat. Blanca','white_cat'],['Cat. Verde','green_cat'],['Cat. Amarilla','yellow_cat'],
+            ['Keys','keys_count'],['Gold Coins','gold_coins'],['BNotes','bnotes'],
+          ].map(([l,k])=>(
+            <div key={k}>
+              <div style={{fontSize:10,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>{l}</div>
+              <input type="number" min="0" value={(newSnap as any)[k]}
+                onChange={e=>setNewSnap(d=>({...d,[k]:parseFloat(e.target.value)||0}))}
+                style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'7px 10px',color:'#e8e0d0',fontSize:14,fontFamily:'Rajdhani,sans-serif',boxSizing:'border-box'}}/>
             </div>
-            <div style={{overflowX:'auto'}}>
-              <table style={{width:'100%',borderCollapse:'collapse',fontSize:14}}>
-                <thead>
-                  <tr style={{borderBottom:`1px solid ${BORDER}`}}>
-                    {['#','Owner / PJs','🐉 BD','❄️ FV','★ Admin','Total','Claims'].map((h,i)=>(
-                      <th key={h} className="font-cinzel uppercase tracking-widest"
-                        style={{padding:'9px 14px',textAlign:i===0?'center':i>=2?'right':'left',fontSize:9,color:i===4?GD:'#555',fontWeight:600}}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {lb.map((p,i)=>(
-                    <tr key={p.id} style={{borderBottom:'1px solid #0f0f20'}}>
-                      <td className="font-cinzel text-center" style={{padding:'10px 14px',color:'#555',fontSize:12}}>{i+1}</td>
-                      <td style={{padding:'10px 14px'}}>
-                        <span className="font-cinzel" style={{color:'#e8e0d0',fontSize:13}}>{p.name}</span>
-                        {p.chars&&<div className="font-rajdhani" style={{fontSize:11,color:'#555'}}>{p.chars}</div>}
-                      </td>
-                      <td className="font-rajdhani font-bold text-right" style={{padding:'10px 14px',color:'#e05050',fontSize:14}}>{p.bd_points}</td>
-                      <td className="font-rajdhani font-bold text-right" style={{padding:'10px 14px',color:'#4ab8f0',fontSize:14}}>{p.fv_points}</td>
-                      <td className="font-cinzel font-bold text-right" style={{padding:'10px 14px',color:G,fontSize:14}}>{(p as any).admin_points_total??0}</td>
-                      <td className="font-cinzel font-bold text-right" style={{padding:'10px 14px',color:'#e8e0d0',fontSize:15}}>{p.total_points}</td>
-                      <td className="font-rajdhani text-right" style={{padding:'10px 14px',color:'#40d0a0',fontSize:13}}>{p.total_claims}</td>
-                    </tr>
+          ))}
+        </div>
+        <div style={{marginTop:12}}>
+          <Input label="Notas" value={newSnap.notes} onChange={v=>setNewSnap(d=>({...d,notes:v}))} placeholder="Descripción del snapshot..."/>
+        </div>
+        <Btn onClick={handleSave} disabled={busy}>{busy?'Guardando...':'💾 Guardar Snapshot'}</Btn>
+      </SCard>
+
+      <SCard title="Historial de Snapshots">
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${BORDER}`}}>
+                {['Fecha','En Banco','Fuera','Claims','BD Soul','BD Eye','BD Heart','Notas'].map(h=>(
+                  <th key={h} style={{padding:'7px 12px',textAlign:'left',fontFamily:'Cinzel,serif',fontSize:8,color:'#666',textTransform:'uppercase'}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((h,i)=>(
+                <tr key={h.id} style={{borderBottom:i<history.length-1?`1px solid #0f0f20`:'none'}}>
+                  <td style={{padding:'8px 12px',fontFamily:'Cinzel,serif',color:'#e8e0d0',fontSize:12}}>{h.snapshot_date}</td>
+                  <td style={{padding:'8px 12px',fontFamily:'Rajdhani,sans-serif',color:'#4ab8f0',fontSize:13}}>{h.loots_banco}</td>
+                  <td style={{padding:'8px 12px',fontFamily:'Rajdhani,sans-serif',color:'#f0a020',fontSize:13}}>{h.loots_fuera}</td>
+                  <td style={{padding:'8px 12px',fontFamily:'Rajdhani,sans-serif',color:G,fontSize:13}}>{h.loots_claims}</td>
+                  <td style={{padding:'8px 12px',fontFamily:'Rajdhani,sans-serif',color:'#c040c0',fontSize:13}}>{h.bd_soul}</td>
+                  <td style={{padding:'8px 12px',fontFamily:'Rajdhani,sans-serif',color:'#4080f0',fontSize:13}}>{h.bd_eye}</td>
+                  <td style={{padding:'8px 12px',fontFamily:'Rajdhani,sans-serif',color:'#e03030',fontSize:13}}>{h.bd_heart}</td>
+                  <td style={{padding:'8px 12px',fontFamily:'Rajdhani,sans-serif',color:'#666',fontSize:11}}>{h.notes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </SCard>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// ─── STATS TAB (Asistencia, Loots, Apoyos mágicos) ───────────
+// ══════════════════════════════════════════════════════════════
+function StatsTab() {
+  const [stats,setStats]=useState<any[]>([])
+  const [loading,setLoading]=useState(true)
+  const [mazeFilter,setMazeFilter]=useState<'BD'|'FV'|'all'>('all')
+
+  useEffect(()=>{
+    supabase.from('maze_attendance')
+      .select('*, players(name,chars), maze_sessions(maze_type,session_date)')
+      .order('created_at',{ascending:false})
+      .limit(500)
+      .then(({data})=>{setStats(data??[]);setLoading(false)})
+  },[])
+
+  const filtered = mazeFilter==='all' ? stats : stats.filter((s:any)=>s.maze_sessions?.maze_type===mazeFilter)
+
+  // Aggregated stats per player
+  const playerStats = useMemo(()=>{
+    const map:Record<string,any>={}
+    filtered.forEach((s:any)=>{
+      const name=s.players?.name??'?'
+      if(!map[name]) map[name]={name,attended:0,loots:0,supports:0}
+      map[name].attended++
+      if(s.got_loot) map[name].loots++
+      if(s.is_support) map[name].supports++
+    })
+    return Object.values(map).sort((a:any,b:any)=>b.attended-a.attended)
+  },[filtered])
+
+  return (
+    <div>
+      <div style={{display:'flex',gap:8,marginBottom:16}}>
+        {(['all','BD','FV'] as const).map(t=>(
+          <button key={t} onClick={()=>setMazeFilter(t)} style={{padding:'7px 16px',borderRadius:6,border:`1px solid ${mazeFilter===t?G:BORDER}`,background:mazeFilter===t?`${G}18`:'transparent',color:mazeFilter===t?G:'#666',cursor:'pointer',fontFamily:'Cinzel,serif',fontSize:9,textTransform:'uppercase',letterSpacing:'0.1em'}}>
+            {t==='all'?'Todos':t==='BD'?'🐉 BD':'❄️ FV'}
+          </button>
+        ))}
+      </div>
+
+      <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
+        <div style={{padding:'10px 20px',borderBottom:`1px solid ${BORDER}`,fontFamily:'Cinzel,serif',fontSize:10,color:GD,textTransform:'uppercase'}}>
+          Estadísticas de Asistencia y Participación
+        </div>
+        {loading ? <div style={{padding:'40px',textAlign:'center',fontFamily:'Rajdhani,sans-serif',color:'#555'}}>Cargando...</div> :
+         playerStats.length===0 ? <div style={{padding:'40px',textAlign:'center',fontFamily:'Rajdhani,sans-serif',color:'#333',fontSize:13}}>Sin datos de asistencia aún. Carga un maze para empezar.</div> : (
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${BORDER}`}}>
+                  {['Jugador','Asistencias','Loots obtenidos','Apoyos mágicos ★'].map(h=>(
+                    <th key={h} style={{padding:'9px 16px',textAlign:h==='Jugador'?'left':'right',fontFamily:'Cinzel,serif',fontSize:8.5,color:'#777',textTransform:'uppercase',letterSpacing:'0.08em'}}>{h}</th>
                   ))}
-                </tbody>
-              </table>
-            </div>
+                </tr>
+              </thead>
+              <tbody>
+                {playerStats.map((p:any,i:number)=>(
+                  <tr key={p.name} style={{borderBottom:`1px solid #0f0f20`}}
+                    onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='#0e0e26'}}
+                    onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent'}}>
+                    <td style={{padding:'10px 16px',fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:13}}>
+                      {i<3?['🥇','🥈','🥉'][i]+' ':''}{p.name}
+                    </td>
+                    <td style={{padding:'10px 16px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:'#4ab8f0',fontSize:15}}>{p.attended}</td>
+                    <td style={{padding:'10px 16px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:15}}>{p.loots}</td>
+                    <td style={{padding:'10px 16px',textAlign:'right',fontFamily:'Rajdhani,sans-serif',fontWeight:700,color:'#f0a020',fontSize:14}}>{p.supports>0?`★ ${p.supports}`:'-'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
-        {tab==='players'&&<PlayersTab showToast={showToast}/>}
-        {tab==='upload'&&<UploadModule showToast={showToast}/>}
-        {tab==='claims'&&<ClaimsTab showToast={showToast}/>}
-        {tab==='alerts'&&(
-          <div style={{maxWidth:720}}>
-            {alerts.filter(a=>!a.resolved).length===0
-              ?<div className="text-center rounded-xl py-14" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-                <p className="font-cinzel uppercase tracking-widest" style={{fontSize:11,color:'#333'}}>✓ Sin alertas pendientes</p>
-              </div>
-              :alerts.filter(a=>!a.resolved).map(a=><AlertCard key={a.id} alert={a} onResolved={()=>getPendingAlerts().then(setAlerts)}/>)
-            }
-          </div>
-        )}
-        {tab==='events'&&(
-          <div className="text-center rounded-xl py-14" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-            <p className="font-cinzel uppercase tracking-widest" style={{fontSize:11,color:'#333'}}>Módulo Eventos — próximamente</p>
-          </div>
-        )}
-        {tab==='anuncios'&&<AnnouncementsTab showToast={showToast}/>}
-        {tab==='fv'&&<FVTab showToast={showToast}/>}
-        {tab==='users'&&<UsersTab showToast={showToast}/>}
       </div>
     </div>
   )
 }
 
-// ── Announcements Tab ─────────────────────────────────────────
-function AnnouncementsTab({showToast}:{showToast:(t:any)=>void}) {
+// ══════════════════════════════════════════════════════════════
+// ─── ANUNCIOS TAB ─────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+function AnunciosTab({showToast}:{showToast:(t:TT)=>void}) {
   const [items,setItems]=useState<Announcement[]>([])
   const [title,setTitle]=useState(''), [content,setContent]=useState('')
   const [imageUrl,setImageUrl]=useState(''), [pinned,setPinned]=useState(false)
@@ -638,89 +785,249 @@ function AnnouncementsTab({showToast}:{showToast:(t:any)=>void}) {
   async function handleCreate(){
     if(!title.trim()){showToast({msg:'El título es requerido',type:'warn'});return}
     setBusy(true)
-    try{
-      await createAnnouncement({title,content:content||undefined,image_url:imageUrl||undefined,pinned})
-      showToast({msg:'Anuncio publicado',type:'ok'})
-      setTitle('');setContent('');setImageUrl('');setPinned(false);load()
-    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    try{await createAnnouncement({title,content:content||undefined,image_url:imageUrl||undefined,pinned});showToast({msg:'Anuncio publicado',type:'ok'});setTitle('');setContent('');setImageUrl('');setPinned(false);load()}
+    catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
     finally{setBusy(false)}
-  }
-
-  async function handleDelete(id:string){
-    await deleteAnnouncement(id);showToast({msg:'Eliminado',type:'ok'});load()
   }
 
   return (
     <div style={{maxWidth:700}}>
-      <div className="rounded-xl p-5 mb-5" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-        <p className="font-cinzel uppercase tracking-widest mb-4" style={{fontSize:10,color:GD}}>Nuevo Anuncio</p>
-        <div className="space-y-3">
-          <div>
-            <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>Título *</p>
-            <input value={title} onChange={e=>setTitle(e.target.value)} className="font-rajdhani w-full"
-              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:14}}/>
-          </div>
-          <div>
-            <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>Contenido / Texto</p>
-            <textarea rows={4} value={content} onChange={e=>setContent(e.target.value)} className="font-rajdhani w-full"
-              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:13,resize:'vertical'}}/>
-          </div>
-          <div>
-            <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>URL de imagen (opcional)</p>
-            <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..."
-              className="font-rajdhani w-full"
-              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:13}}/>
-          </div>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={pinned} onChange={e=>setPinned(e.target.checked)}/>
-            <span className="font-rajdhani" style={{fontSize:13,color:'#888'}}>📌 Fijar anuncio</span>
-          </label>
-          <button onClick={handleCreate} disabled={busy} className="font-cinzel uppercase tracking-widest"
-            style={{fontSize:10,padding:'10px 24px',borderRadius:7,background:`linear-gradient(135deg,#8a6020,#c9a84c)`,border:'none',color:VOID,cursor:'pointer',fontWeight:700,opacity:busy?0.6:1}}>
-            {busy?'Publicando...':'+ Publicar Anuncio'}
-          </button>
+      <SCard title="Nuevo Anuncio" color={`${G}40`}>
+        <Input label="Título *" value={title} onChange={setTitle}/>
+        <div style={{marginBottom:12}}>
+          <div style={{fontSize:10,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>Contenido / Texto</div>
+          <textarea rows={4} value={content} onChange={e=>setContent(e.target.value)}
+            style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'8px 12px',color:'#e8e0d0',fontSize:13,fontFamily:'Rajdhani,sans-serif',resize:'vertical',boxSizing:'border-box'}}/>
         </div>
-      </div>
+        <Input label="URL de imagen (opc.)" value={imageUrl} onChange={setImageUrl} placeholder="https://..."/>
+        <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',marginBottom:16}}>
+          <input type="checkbox" checked={pinned} onChange={e=>setPinned(e.target.checked)}/>
+          <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#aaa'}}>📌 Fijar anuncio</span>
+        </label>
+        <Btn onClick={handleCreate} disabled={busy}>{busy?'Publicando...':'+ Publicar Anuncio'}</Btn>
+      </SCard>
 
-      <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
-        <div className="px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
-          <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD}}>Anuncios publicados — {items.length}</p>
-        </div>
-        {items.length===0
-          ? <p className="font-rajdhani text-center" style={{padding:'28px',color:'#333',fontSize:13}}>Sin anuncios</p>
-          : items.map((a,i)=>(
-            <div key={a.id} className="flex items-start justify-between px-5 py-4"
-              style={{borderBottom:i<items.length-1?'1px solid #0f0f20':'none'}}>
+      <SCard title={`Anuncios publicados — ${items.length}`}>
+        {items.length===0?<p style={{fontFamily:'Rajdhani,sans-serif',color:'#444',fontSize:13}}>Sin anuncios</p>:
+          items.map((a,i)=>(
+            <div key={a.id} style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',padding:'10px 0',borderBottom:i<items.length-1?`1px solid #0f0f20`:'none'}}>
               <div>
-                {a.pinned&&<span className="font-cinzel uppercase tracking-wider" style={{fontSize:8,padding:'2px 8px',borderRadius:10,background:`${G}20`,border:`1px solid ${GD}`,color:G,marginRight:8}}>📌</span>}
-                <span className="font-cinzel font-semibold" style={{color:'#e8e0d0',fontSize:14}}>{a.title}</span>
-                {a.content&&<p className="font-rajdhani mt-1" style={{fontSize:12,color:'#666'}}>{a.content.slice(0,80)}{a.content.length>80?'...':''}</p>}
-                {a.image_url&&<p className="font-rajdhani mt-1" style={{fontSize:10,color:'#4ab8f0'}}>📷 Con imagen</p>}
+                {a.pinned&&<span style={{fontFamily:'Cinzel,serif',fontSize:8,padding:'2px 8px',borderRadius:10,background:`${G}20`,border:`1px solid ${GD}`,color:G,marginRight:8}}>📌</span>}
+                <span style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:14}}>{a.title}</span>
+                {a.content&&<p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666',marginTop:2}}>{a.content.slice(0,80)}...</p>}
               </div>
-              <button onClick={()=>handleDelete(a.id)} className="font-rajdhani"
-                style={{fontSize:11,padding:'5px 12px',borderRadius:5,border:'1px solid #a0202040',background:'#2a0a0a',color:'#e04040',cursor:'pointer',whiteSpace:'nowrap',marginLeft:12}}>
-                Eliminar
-              </button>
+              <Btn onClick={()=>deleteAnnouncement(a.id).then(load).then(()=>showToast({msg:'Eliminado',type:'ok'}))} variant='danger' size='sm'>Eliminar</Btn>
             </div>
           ))
         }
+      </SCard>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// ─── USUARIOS TAB ─────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+const ALL_PERMS = [
+  {key:'ranking',label:'Ranking / Dashboard'},
+  {key:'jugadores',label:'Jugadores'},
+  {key:'upload',label:'Cargar Maze'},
+  {key:'claims',label:'Claims'},
+  {key:'contabilidad',label:'Contabilidad'},
+  {key:'stats',label:'Estadísticas'},
+  {key:'anuncios',label:'Anuncios'},
+  {key:'fv',label:'Frozen Ville'},
+  {key:'usuarios',label:'Usuarios'},
+]
+
+function UsuariosTab({showToast}:{showToast:(t:TT)=>void}) {
+  const [users,setUsers]=useState<any[]>([])
+  const [editId,setEditId]=useState<string|null>(null)
+  const [editPerms,setEditPerms]=useState<Record<string,boolean>>({})
+  const [busy,setBusy]=useState(false)
+
+  async function load(){
+    const{data}=await supabase.from('admin_profiles').select('*, admin_email_map(email)').order('created_at',{ascending:false})
+    setUsers(data??[])
+  }
+  useEffect(()=>{load()},[])
+
+  async function savePerms(id:string){
+    setBusy(true)
+    try{
+      await supabase.from('admin_profiles').update({permissions:editPerms}).eq('id',id)
+      showToast({msg:'Permisos actualizados',type:'ok'});setEditId(null);load()
+    }catch(e:any){showToast({msg:'Error',type:'err'})}
+    finally{setBusy(false)}
+  }
+
+  return (
+    <div style={{maxWidth:800}}>
+      <SCard title="Instrucciones para crear nuevo admin">
+        <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#aaa',lineHeight:1.8,marginBottom:12}}>
+          Los usuarios entran con <strong style={{color:'#e8e0d0'}}>username</strong> y contraseña — nunca con email.<br/>
+          Para crear un nuevo admin:
+        </p>
+        <div style={{background:VOID,border:`1px solid ${BORDER}`,borderRadius:8,padding:'14px 16px',fontFamily:'monospace',fontSize:12,color:G,lineHeight:1.9}}>
+          {`-- 1. Supabase → Authentication → Users → Add user (cualquier email interno)\n-- 2. Copia el UUID del usuario creado\n\nINSERT INTO admin_profiles (id, username, role, permissions)\nVALUES (\n  'UUID-AQUI',\n  'username_del_admin',\n  'manager',  -- o 'superadmin'\n  '{"ranking":true,"players":true,"upload":true,"claims":true,"contabilidad":false,"stats":false,"anuncios":false,"fv":false,"usuarios":false}'\n);\n\nINSERT INTO admin_email_map (user_id, email, username)\nVALUES ('UUID-AQUI', 'email@ejemplo.com', 'username_del_admin');`}
+        </div>
+      </SCard>
+
+      <SCard title={`Admins registrados — ${users.length}`}>
+        {users.map((u,i)=>(
+          <div key={u.id} style={{borderBottom:i<users.length-1?`1px solid #0f0f20`:'none',paddingBottom:16,marginBottom:16}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8}}>
+              <div>
+                <span style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:15}}>{u.username}</span>
+                <span style={{fontFamily:'Cinzel,serif',fontSize:9,padding:'2px 10px',borderRadius:20,border:`1px solid ${u.role==='superadmin'?G:BORDER}`,color:u.role==='superadmin'?G:'#888',marginLeft:10}}>
+                  {u.role}
+                </span>
+                {u.admin_email_map?.email&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555',marginLeft:8}}>{u.admin_email_map.email}</span>}
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                {editId===u.id
+                  ? <><Btn onClick={()=>savePerms(u.id)} disabled={busy} size='sm'>{busy?'...':'✓ Guardar'}</Btn><Btn onClick={()=>setEditId(null)} variant='ghost' size='sm'>Cancelar</Btn></>
+                  : <Btn onClick={()=>{setEditId(u.id);setEditPerms(u.permissions??{})}} variant='ghost' size='sm'>⚙ Permisos</Btn>
+                }
+              </div>
+            </div>
+            {editId===u.id&&(
+              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,paddingLeft:4}}>
+                {ALL_PERMS.map(p=>(
+                  <label key={p.key} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer'}}>
+                    <input type="checkbox" checked={!!editPerms[p.key]} onChange={e=>setEditPerms(d=>({...d,[p.key]:e.target.checked}))}/>
+                    <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#aaa'}}>{p.label}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </SCard>
+    </div>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
+// ─── MAIN ADMIN PAGE ──────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+export default function AdminPage() {
+  const [tab,setTab]=useState<TabKey>('ranking')
+  const [session,setSession]=useState<any>(null)
+  const [loading,setLoading]=useState(true)
+  const [toast,setToast]=useState<TT|null>(null)
+  const [username,setUsername]=useState('')
+  const [password,setPassword]=useState('')
+  const [authErr,setAuthErr]=useState('')
+  const [userPerms,setUserPerms]=useState<Record<string,boolean>>({})
+  const showToast=(t:TT)=>setToast(t)
+
+  useEffect(()=>{
+    supabase.auth.getSession().then(({data})=>{setSession(data.session);setLoading(false)})
+    supabase.auth.onAuthStateChange((_,s)=>setSession(s))
+  },[])
+
+  useEffect(()=>{
+    if(!session)return
+    // Load user permissions
+    supabase.from('admin_profiles').select('permissions,role').eq('id',session.user.id).single()
+      .then(({data})=>{
+        if(data?.role==='superadmin') setUserPerms(Object.fromEntries(ALL_PERMS.map(p=>[p.key,true])))
+        else setUserPerms(data?.permissions??{})
+      })
+  },[session])
+
+  async function handleLogin(e:React.FormEvent){
+    e.preventDefault(); setAuthErr('')
+    try{
+      const{data:emailRow,error:eErr}=await supabase.from('admin_email_map').select('email,username').ilike('username',username.trim()).single()
+      if(eErr||!emailRow){setAuthErr('Usuario no encontrado');return}
+      const{error:loginErr}=await supabase.auth.signInWithPassword({email:emailRow.email,password})
+      if(loginErr)setAuthErr('Contraseña incorrecta')
+    }catch(err:any){setAuthErr('Error al iniciar sesión')}
+  }
+
+  if(loading) return <div style={{minHeight:'100vh',background:VOID,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{fontFamily:'Cinzel,serif',color:GD}}>Cargando...</div></div>
+
+  if(!session) return (
+    <div style={{minHeight:'100vh',background:VOID,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'Rajdhani,sans-serif'}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        <div style={{textAlign:'center',marginBottom:32}}>
+          <div style={{fontSize:48,marginBottom:12}}>🐉</div>
+          <h1 style={{fontFamily:'Cinzel,serif',fontWeight:900,fontSize:24,letterSpacing:'0.12em',background:'linear-gradient(135deg,#f0d080,#c9a84c,#8a6020)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>THE ORIGINALS</h1>
+          <p style={{fontFamily:'Cinzel,serif',fontSize:9,color:GD,textTransform:'uppercase',letterSpacing:'0.14em',marginTop:6}}>Admin Panel</p>
+        </div>
+        <form onSubmit={handleLogin} style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,padding:24}}>
+          <Input label="Usuario" value={username} onChange={setUsername} placeholder="jcwhite"/>
+          <Input label="Contraseña" value={password} onChange={setPassword} type="password"/>
+          {authErr&&<p style={{color:'#e04040',fontSize:13,marginBottom:12,fontFamily:'Rajdhani,sans-serif'}}>{authErr}</p>}
+          <button type="submit" style={{width:'100%',fontSize:12,padding:14,borderRadius:8,background:`linear-gradient(135deg,#8a6020,#c9a84c)`,border:'none',color:VOID,cursor:'pointer',fontFamily:'Cinzel,serif',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.1em'}}>
+            Ingresar
+          </button>
+        </form>
+        <div style={{textAlign:'center',marginTop:16}}>
+          <a href="/dashboard" style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:13,textDecoration:'none'}}>← Dashboard público</a>
+        </div>
+      </div>
+    </div>
+  )
+
+  const TABS: {key:TabKey; label:string; permKey:string}[] = [
+    {key:'ranking',        label:'📊 Ranking',        permKey:'ranking'},
+    {key:'jugadores',      label:'👥 Jugadores',       permKey:'jugadores'},
+    {key:'upload',         label:'📤 Cargar Maze',     permKey:'upload'},
+    {key:'claims',         label:'🏆 Claims',          permKey:'claims'},
+    {key:'contabilidad',   label:'💰 Contabilidad',    permKey:'contabilidad'},
+    {key:'stats',          label:'📈 Estadísticas',    permKey:'stats'},
+    {key:'anuncios',       label:'📢 Anuncios',        permKey:'anuncios'},
+    {key:'fv',             label:'❄️ Frozen Ville',    permKey:'fv'},
+    {key:'usuarios',       label:'🔑 Usuarios',        permKey:'usuarios'},
+  ].filter(t=>userPerms[t.permKey])
+
+  return (
+    <div style={{minHeight:'100vh',background:VOID,fontFamily:'Rajdhani,sans-serif'}}>
+      {toast&&<Toast t={toast} onClose={()=>setToast(null)}/>}
+
+      <header style={{background:'linear-gradient(180deg,#0c0014 0%,#04040e 100%)',borderBottom:'1px solid #c9a84c28'}}>
+        <div style={{maxWidth:1300,margin:'0 auto',padding:'16px 24px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+          <div style={{display:'flex',alignItems:'center',gap:12}}>
+            <span style={{fontSize:22}}>🐉</span>
+            <span style={{fontFamily:'Cinzel,serif',fontWeight:900,fontSize:18,letterSpacing:'0.1em',background:'linear-gradient(135deg,#f0d080,#c9a84c)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent'}}>THE ORIGINALS — ADMIN</span>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:16}}>
+            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:13}}>{session.user.email}</span>
+            <button onClick={()=>supabase.auth.signOut()} style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#555',border:`1px solid ${BORDER}`,padding:'6px 14px',borderRadius:5,background:'none',cursor:'pointer',textTransform:'uppercase',letterSpacing:'0.1em'}}>Salir</button>
+          </div>
+        </div>
+      </header>
+
+      <div style={{maxWidth:1300,margin:'0 auto',padding:'24px'}}>
+        {/* Tabs */}
+        <div style={{display:'flex',gap:4,marginBottom:24,flexWrap:'wrap'}}>
+          {TABS.map(t=>(
+            <button key={t.key} onClick={()=>setTab(t.key)}
+              style={{fontSize:9,padding:'8px 16px',borderRadius:8,cursor:'pointer',border:`1px solid ${tab===t.key?G:BORDER}`,background:tab===t.key?`${G}18`:CARD,color:tab===t.key?G:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.09em',fontWeight:tab===t.key?700:400}}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab==='ranking'      && <RankingTab/>}
+        {tab==='jugadores'    && <JugadoresTab showToast={showToast}/>}
+        {tab==='upload'       && <UploadTab showToast={showToast}/>}
+        {tab==='claims'       && <ClaimsTab showToast={showToast}/>}
+        {tab==='contabilidad' && <ContabilidadTab showToast={showToast}/>}
+        {tab==='stats'        && <StatsTab/>}
+        {tab==='anuncios'     && <AnunciosTab showToast={showToast}/>}
+        {tab==='fv'           && <FVAdminTab showToast={showToast}/>}
+        {tab==='usuarios'     && <UsuariosTab showToast={showToast}/>}
       </div>
     </div>
   )
 }
 
-// ── FV Tab — Puntos y Claims por runa ─────────────────────────
-const FV_RUNES_ADMIN = [
-  {key:'curse',    label:'Curse'},
-  {key:'illusory', label:'Illusory'},
-  {key:'piercing', label:'Piercing'},
-  {key:'riven',    label:'Riven Soul'},
-  {key:'favor',    label:'Favor'},
-  {key:'prayer',   label:'Prayer'},
-  {key:'scroll_ring', label:'Scroll Ring'},
-] as const
-
-function FVTab({showToast}:{showToast:(t:any)=>void}) {
+// ─── FV Admin Tab (inline) ────────────────────────────────────
+function FVAdminTab({showToast}:{showToast:(t:TT)=>void}) {
   const [players,setPlayers]=useState<Player[]>([])
   const [fvData,setFvData]=useState<Record<string,any>>({})
   const [selId,setSelId]=useState('')
@@ -729,128 +1036,58 @@ function FVTab({showToast}:{showToast:(t:any)=>void}) {
   const [fvDate,setFvDate]=useState('')
 
   async function load(){
-    const pl=await getAllPlayers(); setPlayers(pl)
-    const {data}=await supabase.from('fv_rune_points').select('*, players(name)')
+    setPlayers(await getAllPlayers())
+    const{data}=await supabase.from('fv_rune_points').select('*, players(name)')
     const map:Record<string,any>={}
-    ;(data??[]).forEach((r:any)=>{ map[r.player_id]=r })
+    ;(data??[]).forEach((r:any)=>{map[r.player_id]=r})
     setFvData(map)
   }
   useEffect(()=>{load()},[])
 
-  async function handleSave(){
-    if(!selId){showToast({msg:'Selecciona un jugador',type:'warn'});return}
-    setBusy(true)
-    try{
-      await upsertFVRunePoints(selId,edits)
-      showToast({msg:'FV points guardados',type:'ok'});setEdits({});load()
-    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
-    finally{setBusy(false)}
-  }
-
-  async function handleUpdateDate(){
-    if(!fvDate){showToast({msg:'Selecciona una fecha',type:'warn'});return}
-    await updateReportDate('FV',fvDate)
-    showToast({msg:'Fecha FV actualizada',type:'ok'})
-  }
-
-  const selPlayer=players.find(p=>p.id===selId)
   const currentFV=selId?fvData[selId]:null
 
   return (
     <div style={{maxWidth:900}}>
-      {/* Fecha reporte FV */}
-      <div className="rounded-xl p-4 mb-4 flex items-center gap-3" style={{background:CARD,border:'1px solid #4ab8f030'}}>
-        <span className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:'#4ab8f0'}}>Último reporte FV:</span>
+      <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:16,padding:'12px 16px',background:CARD,borderRadius:10,border:'1px solid #4ab8f030'}}>
+        <span style={{fontFamily:'Cinzel,serif',fontSize:10,color:'#4ab8f0',textTransform:'uppercase',letterSpacing:'0.1em'}}>Último reporte FV:</span>
         <input type="date" value={fvDate} onChange={e=>setFvDate(e.target.value)}
           style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'5px 10px',color:'#e8e0d0',fontSize:13}}/>
-        <button onClick={handleUpdateDate} className="font-cinzel uppercase tracking-wider"
-          style={{fontSize:9,padding:'7px 14px',borderRadius:5,background:'#4ab8f020',border:'1px solid #4ab8f060',color:'#4ab8f0',cursor:'pointer'}}>
-          Actualizar
-        </button>
+        <Btn onClick={()=>updateReportDate('FV',fvDate).then(()=>showToast({msg:'Fecha actualizada',type:'ok'}))} size='sm'>Actualizar</Btn>
       </div>
 
-      {/* Editor por jugador */}
-      <div className="rounded-xl p-5 mb-5" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-        <p className="font-cinzel uppercase tracking-widest mb-4" style={{fontSize:10,color:GD}}>Editar puntos FV por jugador</p>
-        <div className="mb-4">
-          <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>Jugador</p>
+      <SCard title="Editar Puntos FV por Jugador">
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:10,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>Jugador</div>
           <select value={selId} onChange={e=>{setSelId(e.target.value);setEdits({})}}
-            className="font-rajdhani" style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:13,width:280}}>
+            style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'Rajdhani,sans-serif',width:300}}>
             <option value="">— Seleccionar —</option>
             {players.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </div>
-
         {selId&&(
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            {FV_RUNES_ADMIN.map(r=>(
-              <div key={r.key} className="rounded-lg p-3" style={{background:DEEP,border:`1px solid ${BORDER}`}}>
-                <p className="font-cinzel uppercase tracking-wider mb-2" style={{fontSize:9,color:'#888'}}>{r.label}</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {[['_avail','Pts Disp.'],['_claims','Claims']].map(([suffix,lbl])=>(
-                    <div key={suffix}>
-                      <p className="font-rajdhani" style={{fontSize:10,color:'#666'}}>{lbl}</p>
-                      <input type="number" step="0.0001" min="0"
-                        value={edits[`${r.key}${suffix}`]??currentFV?.[`${r.key}${suffix}`]??0}
-                        onChange={e=>setEdits(d=>({...d,[`${r.key}${suffix}`]:parseFloat(e.target.value)||0}))}
-                        className="font-rajdhani w-full" style={{background:'#04040e',border:`1px solid ${BORDER}`,borderRadius:4,padding:'5px 7px',color:'#e8e0d0',fontSize:12}}/>
-                    </div>
-                  ))}
-                </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10,marginBottom:16}}>
+            {FV_RUNES.map(r=>(
+              <div key={r.key} style={{background:DEEP,border:`1px solid ${r.color}30`,borderRadius:8,padding:'10px 12px'}}>
+                <div style={{fontFamily:'Cinzel,serif',fontSize:8,color:r.color,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:8}}>{r.label}</div>
+                {[['_avail','Pts Disp.'],['_claims','Claims']].map(([suf,lbl])=>(
+                  <div key={suf} style={{marginBottom:6}}>
+                    <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#666',marginBottom:2}}>{lbl}</div>
+                    <input type="number" step="0.0001" min="0"
+                      value={edits[`${r.key}${suf}`]??currentFV?.[`${r.key}${suf}`]??0}
+                      onChange={e=>setEdits(d=>({...d,[`${r.key}${suf}`]:parseFloat(e.target.value)||0}))}
+                      style={{width:'100%',background:'#04040e',border:`1px solid ${BORDER}`,borderRadius:4,padding:'5px 7px',color:'#e8e0d0',fontSize:12,fontFamily:'Rajdhani,sans-serif',boxSizing:'border-box'}}/>
+                  </div>
+                ))}
               </div>
             ))}
           </div>
         )}
-
-        <button onClick={handleSave} disabled={busy||!selId} className="font-cinzel uppercase tracking-widest"
-          style={{fontSize:10,padding:'10px 24px',borderRadius:7,background:`${G}20`,border:`1px solid ${GD}`,color:G,cursor:'pointer',opacity:(busy||!selId)?0.5:1}}>
-          {busy?'Guardando...':'✓ Guardar FV Points'}
-        </button>
-      </div>
-
-      {/* Tabla resumen FV */}
-      <div style={{background:CARD,border:'1px solid #4ab8f030',borderRadius:12,overflow:'hidden'}}>
-        <div className="px-5 py-3" style={{borderBottom:'1px solid #4ab8f020'}}>
-          <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:'#4ab8f0'}}>Resumen FV — todos los jugadores</p>
-        </div>
-        <div style={{overflowX:'auto'}}>
-          <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
-            <thead>
-              <tr style={{borderBottom:'1px solid #081010'}}>
-                <th className="font-cinzel text-left" style={{padding:'7px 12px',fontSize:8,color:'#555'}}>Jugador</th>
-                {FV_RUNES_ADMIN.map(r=>(
-                  <th key={r.key} colSpan={2} className="font-cinzel text-center uppercase" style={{padding:'7px 8px',fontSize:8,color:'#888',borderLeft:'1px solid #1a1a3a'}}>{r.label}</th>
-                ))}
-              </tr>
-              <tr style={{borderBottom:'1px solid #081010',background:'#060a0a'}}>
-                <th/>
-                {FV_RUNES_ADMIN.map(r=>(
-                  <><th key={`${r.key}a`} className="font-cinzel text-right" style={{padding:'3px 6px',fontSize:7,color:'#666',borderLeft:'1px solid #1a1a3a'}}>Pts</th>
-                  <th key={`${r.key}c`} className="font-cinzel text-right" style={{padding:'3px 6px',fontSize:7,color:'#666'}}>Claims</th></>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {players.map((p,i)=>{
-                const fv=fvData[p.id]
-                return (
-                  <tr key={p.id} style={{borderBottom:'1px solid #081010'}}>
-                    <td className="font-cinzel" style={{padding:'8px 12px',color:'#e8e0d0',fontSize:12}}>{p.name}</td>
-                    {FV_RUNES_ADMIN.map(r=>(
-                      <><td key={`${r.key}a`} className="font-rajdhani text-right" style={{padding:'8px 6px',color:'#4ab8f0',fontSize:12,borderLeft:'1px solid #1a1a3a'}}>
-                        {(fv?.[`${r.key}_avail`] ?? 0).toFixed(2)}
-                      </td>
-                      <td key={`${r.key}c`} className="font-rajdhani text-right" style={{padding:'8px 6px',color:'#40d0a0',fontSize:12}}>
-                        {fv?.[`${r.key}_claims`] ?? 0}
-                      </td></>
-                    ))}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+        <Btn onClick={()=>{
+          if(!selId){showToast({msg:'Selecciona un jugador',type:'warn'});return}
+          setBusy(true)
+          upsertFVRunePoints(selId,edits).then(()=>{showToast({msg:'FV guardado',type:'ok'});setEdits({});load()}).catch((e:any)=>showToast({msg:'Error: '+e.message,type:'err'})).finally(()=>setBusy(false))
+        }} disabled={busy||!selId}>{busy?'Guardando...':'✓ Guardar FV Points'}</Btn>
+      </SCard>
     </div>
   )
 }
