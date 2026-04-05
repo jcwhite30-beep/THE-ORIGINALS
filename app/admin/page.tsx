@@ -469,18 +469,14 @@ export default function AdminPage() {
   async function handleLogin(e:React.FormEvent){
     e.preventDefault(); setAuthErr('')
     try {
-      // 1. Buscar admin_profile por username para obtener el ID
-      const {data:profile, error:pErr} = await supabase
-        .from('admin_profiles').select('id,username,role').eq('username', username.toLowerCase().trim()).single()
-      if (pErr || !profile) { setAuthErr('Usuario no encontrado'); return }
-
-      // 2. El email está guardado en admin_profiles (columna email que vamos a agregar)
-      // Por ahora usamos el email_map que guardamos en la tabla
-      const {data:emailRow} = await supabase
-        .from('admin_email_map').select('email').eq('user_id', profile.id).single()
-      if (!emailRow) { setAuthErr('Credenciales no configuradas. Contacta al SuperAdmin.'); return }
-
-      // 3. Login con email real + password
+      // Buscar en admin_email_map por username (ilike = case insensitive)
+      const {data:emailRow, error:eErr} = await supabase
+        .from('admin_email_map')
+        .select('email, username')
+        .ilike('username', username.trim())
+        .single()
+      if (eErr || !emailRow) { setAuthErr('Usuario no encontrado'); return }
+      // Login con el email real de Supabase Auth
       const {error:loginErr} = await supabase.auth.signInWithPassword({
         email: emailRow.email, password
       })
