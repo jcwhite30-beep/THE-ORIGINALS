@@ -5,11 +5,13 @@ import {
   supabase, getAdminLeaderboard, getAllPlayers, getPendingAlerts,
   getClaims, approveClaim, processClaim, resolveAlert, createMazeSession,
   addPlayerPoints, createPlayer, updatePlayer, suggestPlayerName,
-  LeaderboardEntry, Player, PointAlert, Claim, MazeType
+  getAnnouncements, createAnnouncement, deleteAnnouncement,
+  getFVRunePoints, upsertFVRunePoints, updateReportDate,
+  LeaderboardEntry, Player, PointAlert, Claim, MazeType, Announcement, FVRunePoints
 } from '@/lib/supabase'
 import { parseMazeReport, calcPointShare, runOCR } from '@/lib/ocr'
 
-type Tab = 'rankings'|'players'|'upload'|'claims'|'alerts'|'events'|'users'
+type Tab = 'rankings'|'players'|'upload'|'claims'|'alerts'|'events'|'anuncios'|'fv'|'users'
 const G='#c9a84c',GD='#7a6030',CARD='#0c0c22',DEEP='#07071a',VOID='#04040e',BORDER='#1e1e40'
 
 // ── Toast ──────────────────────────────────────────────────────
@@ -486,13 +488,15 @@ export default function AdminPage() {
 
   const pendingAlerts=alerts.filter(a=>!a.resolved).length
   const TABS=[
-    {key:'rankings' as Tab,label:'📊 Rankings'},
-    {key:'players'  as Tab,label:'👥 Jugadores'},
-    {key:'upload'   as Tab,label:'📤 Cargar Maze'},
-    {key:'claims'   as Tab,label:'🏆 Claims'},
-    {key:'alerts'   as Tab,label:'⚠ Alertas',badge:pendingAlerts},
-    {key:'events'   as Tab,label:'🎪 Eventos'},
-    {key:'users'    as Tab,label:'🔑 Usuarios'},
+    {key:'rankings'  as Tab,label:'📊 Rankings'},
+    {key:'players'   as Tab,label:'👥 Jugadores'},
+    {key:'upload'    as Tab,label:'📤 Cargar Maze'},
+    {key:'claims'    as Tab,label:'🏆 Claims'},
+    {key:'fv'        as Tab,label:'❄️ Frozen Ville'},
+    {key:'anuncios'  as Tab,label:'📢 Anuncios'},
+    {key:'alerts'    as Tab,label:'⚠ Alertas',badge:pendingAlerts},
+    {key:'events'    as Tab,label:'🎪 Eventos'},
+    {key:'users'     as Tab,label:'🔑 Usuarios'},
   ]
 
   return (
@@ -575,7 +579,238 @@ export default function AdminPage() {
             <p className="font-cinzel uppercase tracking-widest" style={{fontSize:11,color:'#333'}}>Módulo Eventos — próximamente</p>
           </div>
         )}
+        {tab==='anuncios'&&<AnnouncementsTab showToast={showToast}/>}
+        {tab==='fv'&&<FVTab showToast={showToast}/>}
         {tab==='users'&&<UsersTab showToast={showToast}/>}
+      </div>
+    </div>
+  )
+}
+
+// ── Announcements Tab ─────────────────────────────────────────
+function AnnouncementsTab({showToast}:{showToast:(t:any)=>void}) {
+  const [items,setItems]=useState<Announcement[]>([])
+  const [title,setTitle]=useState(''), [content,setContent]=useState('')
+  const [imageUrl,setImageUrl]=useState(''), [pinned,setPinned]=useState(false)
+  const [busy,setBusy]=useState(false)
+
+  async function load(){setItems(await getAnnouncements())}
+  useEffect(()=>{load()},[])
+
+  async function handleCreate(){
+    if(!title.trim()){showToast({msg:'El título es requerido',type:'warn'});return}
+    setBusy(true)
+    try{
+      await createAnnouncement({title,content:content||undefined,image_url:imageUrl||undefined,pinned})
+      showToast({msg:'Anuncio publicado',type:'ok'})
+      setTitle('');setContent('');setImageUrl('');setPinned(false);load()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    finally{setBusy(false)}
+  }
+
+  async function handleDelete(id:string){
+    await deleteAnnouncement(id);showToast({msg:'Eliminado',type:'ok'});load()
+  }
+
+  return (
+    <div style={{maxWidth:700}}>
+      <div className="rounded-xl p-5 mb-5" style={{background:CARD,border:`1px solid ${BORDER}`}}>
+        <p className="font-cinzel uppercase tracking-widest mb-4" style={{fontSize:10,color:GD}}>Nuevo Anuncio</p>
+        <div className="space-y-3">
+          <div>
+            <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>Título *</p>
+            <input value={title} onChange={e=>setTitle(e.target.value)} className="font-rajdhani w-full"
+              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:14}}/>
+          </div>
+          <div>
+            <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>Contenido / Texto</p>
+            <textarea rows={4} value={content} onChange={e=>setContent(e.target.value)} className="font-rajdhani w-full"
+              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:13,resize:'vertical'}}/>
+          </div>
+          <div>
+            <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>URL de imagen (opcional)</p>
+            <input value={imageUrl} onChange={e=>setImageUrl(e.target.value)} placeholder="https://..."
+              className="font-rajdhani w-full"
+              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:13}}/>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={pinned} onChange={e=>setPinned(e.target.checked)}/>
+            <span className="font-rajdhani" style={{fontSize:13,color:'#888'}}>📌 Fijar anuncio</span>
+          </label>
+          <button onClick={handleCreate} disabled={busy} className="font-cinzel uppercase tracking-widest"
+            style={{fontSize:10,padding:'10px 24px',borderRadius:7,background:`linear-gradient(135deg,#8a6020,#c9a84c)`,border:'none',color:VOID,cursor:'pointer',fontWeight:700,opacity:busy?0.6:1}}>
+            {busy?'Publicando...':'+ Publicar Anuncio'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
+        <div className="px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
+          <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD}}>Anuncios publicados — {items.length}</p>
+        </div>
+        {items.length===0
+          ? <p className="font-rajdhani text-center" style={{padding:'28px',color:'#333',fontSize:13}}>Sin anuncios</p>
+          : items.map((a,i)=>(
+            <div key={a.id} className="flex items-start justify-between px-5 py-4"
+              style={{borderBottom:i<items.length-1?'1px solid #0f0f20':'none'}}>
+              <div>
+                {a.pinned&&<span className="font-cinzel uppercase tracking-wider" style={{fontSize:8,padding:'2px 8px',borderRadius:10,background:`${G}20`,border:`1px solid ${GD}`,color:G,marginRight:8}}>📌</span>}
+                <span className="font-cinzel font-semibold" style={{color:'#e8e0d0',fontSize:14}}>{a.title}</span>
+                {a.content&&<p className="font-rajdhani mt-1" style={{fontSize:12,color:'#666'}}>{a.content.slice(0,80)}{a.content.length>80?'...':''}</p>}
+                {a.image_url&&<p className="font-rajdhani mt-1" style={{fontSize:10,color:'#4ab8f0'}}>📷 Con imagen</p>}
+              </div>
+              <button onClick={()=>handleDelete(a.id)} className="font-rajdhani"
+                style={{fontSize:11,padding:'5px 12px',borderRadius:5,border:'1px solid #a0202040',background:'#2a0a0a',color:'#e04040',cursor:'pointer',whiteSpace:'nowrap',marginLeft:12}}>
+                Eliminar
+              </button>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  )
+}
+
+// ── FV Tab — Puntos y Claims por runa ─────────────────────────
+const FV_RUNES_ADMIN = [
+  {key:'curse',    label:'Curse'},
+  {key:'illusory', label:'Illusory'},
+  {key:'piercing', label:'Piercing'},
+  {key:'riven',    label:'Riven Soul'},
+  {key:'favor',    label:'Favor'},
+  {key:'prayer',   label:'Prayer'},
+] as const
+
+function FVTab({showToast}:{showToast:(t:any)=>void}) {
+  const [players,setPlayers]=useState<Player[]>([])
+  const [fvData,setFvData]=useState<Record<string,any>>({})
+  const [selId,setSelId]=useState('')
+  const [edits,setEdits]=useState<Record<string,number>>({})
+  const [busy,setBusy]=useState(false)
+  const [fvDate,setFvDate]=useState('')
+
+  async function load(){
+    const pl=await getAllPlayers(); setPlayers(pl)
+    const {data}=await supabase.from('fv_rune_points').select('*, players(name)')
+    const map:Record<string,any>={}
+    ;(data??[]).forEach((r:any)=>{ map[r.player_id]=r })
+    setFvData(map)
+  }
+  useEffect(()=>{load()},[])
+
+  async function handleSave(){
+    if(!selId){showToast({msg:'Selecciona un jugador',type:'warn'});return}
+    setBusy(true)
+    try{
+      await upsertFVRunePoints(selId,edits)
+      showToast({msg:'FV points guardados',type:'ok'});setEdits({});load()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    finally{setBusy(false)}
+  }
+
+  async function handleUpdateDate(){
+    if(!fvDate){showToast({msg:'Selecciona una fecha',type:'warn'});return}
+    await updateReportDate('FV',fvDate)
+    showToast({msg:'Fecha FV actualizada',type:'ok'})
+  }
+
+  const selPlayer=players.find(p=>p.id===selId)
+  const currentFV=selId?fvData[selId]:null
+
+  return (
+    <div style={{maxWidth:900}}>
+      {/* Fecha reporte FV */}
+      <div className="rounded-xl p-4 mb-4 flex items-center gap-3" style={{background:CARD,border:'1px solid #4ab8f030'}}>
+        <span className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:'#4ab8f0'}}>Último reporte FV:</span>
+        <input type="date" value={fvDate} onChange={e=>setFvDate(e.target.value)}
+          style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'5px 10px',color:'#e8e0d0',fontSize:13}}/>
+        <button onClick={handleUpdateDate} className="font-cinzel uppercase tracking-wider"
+          style={{fontSize:9,padding:'7px 14px',borderRadius:5,background:'#4ab8f020',border:'1px solid #4ab8f060',color:'#4ab8f0',cursor:'pointer'}}>
+          Actualizar
+        </button>
+      </div>
+
+      {/* Editor por jugador */}
+      <div className="rounded-xl p-5 mb-5" style={{background:CARD,border:`1px solid ${BORDER}`}}>
+        <p className="font-cinzel uppercase tracking-widest mb-4" style={{fontSize:10,color:GD}}>Editar puntos FV por jugador</p>
+        <div className="mb-4">
+          <p className="font-rajdhani mb-1" style={{fontSize:11,color:'#888'}}>Jugador</p>
+          <select value={selId} onChange={e=>{setSelId(e.target.value);setEdits({})}}
+            className="font-rajdhani" style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'7px 10px',color:'#e8e0d0',fontSize:13,width:280}}>
+            <option value="">— Seleccionar —</option>
+            {players.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+
+        {selId&&(
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            {FV_RUNES_ADMIN.map(r=>(
+              <div key={r.key} className="rounded-lg p-3" style={{background:DEEP,border:`1px solid ${BORDER}`}}>
+                <p className="font-cinzel uppercase tracking-wider mb-2" style={{fontSize:9,color:'#888'}}>{r.label}</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {[['_avail','Pts Disp.'],['_claims','Claims']].map(([suffix,lbl])=>(
+                    <div key={suffix}>
+                      <p className="font-rajdhani" style={{fontSize:10,color:'#666'}}>{lbl}</p>
+                      <input type="number" step="0.0001" min="0"
+                        value={edits[`${r.key}${suffix}`]??currentFV?.[`${r.key}${suffix}`]??0}
+                        onChange={e=>setEdits(d=>({...d,[`${r.key}${suffix}`]:parseFloat(e.target.value)||0}))}
+                        className="font-rajdhani w-full" style={{background:'#04040e',border:`1px solid ${BORDER}`,borderRadius:4,padding:'5px 7px',color:'#e8e0d0',fontSize:12}}/>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button onClick={handleSave} disabled={busy||!selId} className="font-cinzel uppercase tracking-widest"
+          style={{fontSize:10,padding:'10px 24px',borderRadius:7,background:`${G}20`,border:`1px solid ${GD}`,color:G,cursor:'pointer',opacity:(busy||!selId)?0.5:1}}>
+          {busy?'Guardando...':'✓ Guardar FV Points'}
+        </button>
+      </div>
+
+      {/* Tabla resumen FV */}
+      <div style={{background:CARD,border:'1px solid #4ab8f030',borderRadius:12,overflow:'hidden'}}>
+        <div className="px-5 py-3" style={{borderBottom:'1px solid #4ab8f020'}}>
+          <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:'#4ab8f0'}}>Resumen FV — todos los jugadores</p>
+        </div>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:11}}>
+            <thead>
+              <tr style={{borderBottom:'1px solid #081010'}}>
+                <th className="font-cinzel text-left" style={{padding:'7px 12px',fontSize:8,color:'#555'}}>Jugador</th>
+                {FV_RUNES_ADMIN.map(r=>(
+                  <th key={r.key} colSpan={2} className="font-cinzel text-center uppercase" style={{padding:'7px 8px',fontSize:8,color:'#888',borderLeft:'1px solid #1a1a3a'}}>{r.label}</th>
+                ))}
+              </tr>
+              <tr style={{borderBottom:'1px solid #081010',background:'#060a0a'}}>
+                <th/>
+                {FV_RUNES_ADMIN.map(r=>(
+                  <><th key={`${r.key}a`} className="font-cinzel text-right" style={{padding:'3px 6px',fontSize:7,color:'#666',borderLeft:'1px solid #1a1a3a'}}>Pts</th>
+                  <th key={`${r.key}c`} className="font-cinzel text-right" style={{padding:'3px 6px',fontSize:7,color:'#666'}}>Claims</th></>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {players.map((p,i)=>{
+                const fv=fvData[p.id]
+                return (
+                  <tr key={p.id} style={{borderBottom:'1px solid #081010'}}>
+                    <td className="font-cinzel" style={{padding:'8px 12px',color:'#e8e0d0',fontSize:12}}>{p.name}</td>
+                    {FV_RUNES_ADMIN.map(r=>(
+                      <><td key={`${r.key}a`} className="font-rajdhani text-right" style={{padding:'8px 6px',color:'#4ab8f0',fontSize:12,borderLeft:'1px solid #1a1a3a'}}>
+                        {fv?.[`${r.key}_avail`]?.toFixed(2)??'—'}
+                      </td>
+                      <td key={`${r.key}c`} className="font-rajdhani text-right" style={{padding:'8px 6px',color:'#40d0a0',fontSize:12}}>
+                        {fv?.[`${r.key}_claims`]??'—'}
+                      </td></>
+                    ))}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   )

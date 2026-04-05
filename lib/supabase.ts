@@ -125,3 +125,49 @@ export async function suggestPlayerName(input: string) {
   const { data } = await supabase.rpc('suggest_player_name', { input_name: input })
   return data ?? []
 }
+
+// ── Announcements ─────────────────────────────────────────────
+export interface Announcement {
+  id: string; title: string; content?: string
+  image_url?: string; pinned: boolean; created_at: string
+}
+export async function getAnnouncements(): Promise<Announcement[]> {
+  const { data } = await supabase.from('announcements').select('*')
+    .order('pinned', { ascending: false }).order('created_at', { ascending: false })
+  return data ?? []
+}
+export async function createAnnouncement(a: Omit<Announcement,'id'|'created_at'>) {
+  const { error } = await supabase.from('announcements').insert(a)
+  if (error) throw error
+}
+export async function deleteAnnouncement(id: string) {
+  const { error } = await supabase.from('announcements').delete().eq('id', id)
+  if (error) throw error
+}
+
+// ── FV Rune Points ────────────────────────────────────────────
+export interface FVRunePoints {
+  id: string; player_id: string
+  curse_avail: number;    curse_claims: number
+  illusory_avail: number; illusory_claims: number
+  piercing_avail: number; piercing_claims: number
+  riven_avail: number;    riven_claims: number
+  favor_avail: number;    favor_claims: number
+  prayer_avail: number;   prayer_claims: number
+}
+export async function getFVRunePoints(): Promise<(FVRunePoints & { players: { name: string } }  )[]> {
+  const { data } = await supabase.from('fv_rune_points').select('*, players(name)')
+  return data ?? []
+}
+export async function upsertFVRunePoints(playerId: string, updates: Partial<FVRunePoints>) {
+  const { error } = await supabase.from('fv_rune_points')
+    .upsert({ player_id: playerId, ...updates, updated_at: new Date().toISOString() })
+  if (error) throw error
+}
+
+// ── Report dates ──────────────────────────────────────────────
+export async function updateReportDate(mazeType: 'BD'|'FV', date: string) {
+  const { error } = await supabase.from('report_dates')
+    .upsert({ maze_type: mazeType, last_date: date, updated_at: new Date().toISOString() })
+  if (error) throw error
+}
