@@ -171,3 +171,36 @@ export async function updateReportDate(mazeType: 'BD'|'FV', date: string) {
     .upsert({ maze_type: mazeType, last_date: date, updated_at: new Date().toISOString() })
   if (error) throw error
 }
+
+// ── Username-based login ──────────────────────────────────────
+// Supabase Auth requiere email, pero nosotros guardamos username en admin_profiles
+// Este helper busca el email real a partir del username para hacer login
+export async function loginWithUsername(username: string, password: string) {
+  // 1. Buscar el usuario en admin_profiles por username
+  const { data: profile, error: profileErr } = await supabase
+    .from('admin_profiles')
+    .select('id, username, role')
+    .eq('username', username)
+    .single()
+
+  if (profileErr || !profile) {
+    throw new Error('Usuario no encontrado')
+  }
+
+  // 2. Buscar el email en auth.users via función RPC (necesita permisos)
+  // Como alternativa, guardamos el email en admin_profiles también
+  const { data: emailData, error: emailErr } = await supabase
+    .rpc('get_user_email_by_id', { user_id: profile.id })
+
+  if (emailErr || !emailData) {
+    throw new Error('No se pudo obtener el email del usuario')
+  }
+
+  // 3. Login con email + password
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: emailData,
+    password,
+  })
+  if (error) throw new Error('Contraseña incorrecta')
+  return data
+}

@@ -385,37 +385,54 @@ function AlertCard({alert,onResolved}:{alert:PointAlert;onResolved:()=>void}) {
 // ── Users Tab ──────────────────────────────────────────────────
 function UsersTab({showToast}:{showToast:(t:TT)=>void}) {
   const [users,setUsers]=useState<any[]>([])
-  const [email,setEmail]=useState(''),  [pass,setPass]=useState('')
-  const [uname,setUname]=useState(''),  [role,setRole]=useState<'manager'|'superadmin'>('manager')
-  const [busy,setBusy]=useState(false)
 
-  async function loadUsers(){const{data}=await supabase.from('admin_profiles').select('*').order('created_at',{ascending:false});setUsers(data??[])}
+  async function loadUsers(){
+    const{data}=await supabase.from('admin_profiles')
+      .select('*, admin_email_map(email)')
+      .order('created_at',{ascending:false})
+    setUsers(data??[])
+  }
   useEffect(()=>{loadUsers()},[])
 
   return (
-    <div style={{maxWidth:700}}>
-      <div className="rounded-xl p-5 mb-4" style={{background:CARD,border:`1px solid ${BORDER}`}}>
-        <p className="font-cinzel uppercase tracking-widest mb-4" style={{fontSize:10,color:GD}}>Pasos para crear Admin / Manager</p>
-        <p className="font-rajdhani mb-3" style={{fontSize:13,color:'#888',lineHeight:1.7}}>
-          1. Ve a Supabase → Authentication → Users → <strong style={{color:'#e8e0d0'}}>Add user</strong><br/>
-          2. Ingresa email y contraseña del nuevo admin<br/>
-          3. Activa "Auto Confirm User" → Create<br/>
-          4. Copia el UID del usuario creado<br/>
-          5. Ejecuta en SQL Editor:
+    <div style={{maxWidth:720}}>
+      <div className="rounded-xl p-5 mb-4" style={{background:CARD,border:`1px solid ${G}30`}}>
+        <p className="font-cinzel uppercase tracking-widest mb-3" style={{fontSize:10,color:GD}}>Cómo crear un nuevo Admin / Manager</p>
+        <p className="font-rajdhani mb-4" style={{fontSize:13,color:'#aaa',lineHeight:1.8}}>
+          Los usuarios entran con <strong style={{color:'#e8e0d0'}}>username</strong> y contraseña (no con email).<br/>
+          Sigue estos pasos para crear un nuevo admin:
         </p>
-        <div className="rounded-lg p-4 font-mono" style={{background:VOID,border:`1px solid ${BORDER}`,fontSize:12,color:G,lineHeight:1.8}}>
-          {"INSERT INTO admin_profiles (id, username, role)\nVALUES (\n  'PEGA-EL-UUID-AQUI',\n  'nombre_usuario',\n  'manager'  -- o superadmin\n);"}
+        <div className="space-y-3">
+          {[
+            ['1','Supabase → Authentication → Users → Add user','Ingresa cualquier email (interno) y la contraseña. Activa Auto Confirm.'],
+            ['2','Copia el UID del usuario creado','Aparece en la columna UID de la lista de usuarios.'],
+            ['3','Ejecuta este SQL (reemplaza los valores):',''],
+          ].map(([n,title,sub])=>(
+            <div key={n} className="flex gap-3 items-start">
+              <span className="font-cinzel font-bold flex-shrink-0" style={{fontSize:13,color:G,width:20}}>{n}.</span>
+              <div>
+                <p className="font-rajdhani font-bold" style={{fontSize:13,color:'#e8e0d0'}}>{title}</p>
+                {sub&&<p className="font-rajdhani" style={{fontSize:12,color:'#777'}}>{sub}</p>}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-lg p-4 mt-4" style={{background:VOID,border:`1px solid ${BORDER}`,fontFamily:'monospace',fontSize:12,color:G,lineHeight:1.9}}>
+          {`-- 1. Perfil de admin\nINSERT INTO admin_profiles (id, username, role)\nVALUES (\n  'PEGA-EL-UUID-AQUI',\n  'el_username',        -- así va a entrar el usuario\n  'manager'             -- o 'superadmin'\n);\n\n-- 2. Mapa de email (para el login por username)\nINSERT INTO admin_email_map (user_id, email, username)\nVALUES (\n  'PEGA-EL-UUID-AQUI',\n  'el-email@ejemplo.com',  -- el email que pusiste en Auth\n  'el_username'\n);`}
         </div>
       </div>
       {users.length>0&&(
         <div style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,overflow:'hidden'}}>
           <div className="px-5 py-3" style={{borderBottom:`1px solid ${BORDER}`}}>
-            <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD}}>Admins registrados</p>
+            <p className="font-cinzel uppercase tracking-widest" style={{fontSize:10,color:GD}}>Admins registrados — {users.length}</p>
           </div>
           {users.map((u,i)=>(
             <div key={u.id} className="flex items-center justify-between px-5 py-3"
               style={{borderBottom:i<users.length-1?'1px solid #0f0f20':'none'}}>
-              <span className="font-cinzel" style={{color:'#e8e0d0',fontSize:14}}>{u.username}</span>
+              <div>
+                <span className="font-cinzel font-semibold" style={{color:'#e8e0d0',fontSize:14}}>{u.username}</span>
+                {u.admin_email_map?.email&&<span className="font-rajdhani ml-2" style={{fontSize:11,color:'#555'}}>{u.admin_email_map.email}</span>}
+              </div>
               <span className="font-cinzel uppercase tracking-wider"
                 style={{fontSize:9,padding:'3px 10px',borderRadius:20,border:`1px solid ${u.role==='superadmin'?G:BORDER}`,color:u.role==='superadmin'?G:'#888'}}>
                 {u.role}
@@ -436,7 +453,7 @@ export default function AdminPage() {
   const [lb,setLb]=useState<LeaderboardEntry[]>([])
   const [alerts,setAlerts]=useState<PointAlert[]>([])
   const [toast,setToast]=useState<TT|null>(null)
-  const [email,setEmail]=useState(''),  [password,setPassword]=useState(''),  [authErr,setAuthErr]=useState('')
+  const [username,setUsername]=useState(''), [password,setPassword]=useState(''), [authErr,setAuthErr]=useState('')
   const showToast=(t:TT)=>setToast(t)
 
   useEffect(()=>{
@@ -450,9 +467,27 @@ export default function AdminPage() {
   },[session])
 
   async function handleLogin(e:React.FormEvent){
-    e.preventDefault();setAuthErr('')
-    const{error}=await supabase.auth.signInWithPassword({email,password})
-    if(error)setAuthErr(error.message)
+    e.preventDefault(); setAuthErr('')
+    try {
+      // 1. Buscar admin_profile por username para obtener el ID
+      const {data:profile, error:pErr} = await supabase
+        .from('admin_profiles').select('id,username,role').eq('username', username.toLowerCase().trim()).single()
+      if (pErr || !profile) { setAuthErr('Usuario no encontrado'); return }
+
+      // 2. El email está guardado en admin_profiles (columna email que vamos a agregar)
+      // Por ahora usamos el email_map que guardamos en la tabla
+      const {data:emailRow} = await supabase
+        .from('admin_email_map').select('email').eq('user_id', profile.id).single()
+      if (!emailRow) { setAuthErr('Credenciales no configuradas. Contacta al SuperAdmin.'); return }
+
+      // 3. Login con email real + password
+      const {error:loginErr} = await supabase.auth.signInWithPassword({
+        email: emailRow.email, password
+      })
+      if (loginErr) setAuthErr('Contraseña incorrecta')
+    } catch(err:any) {
+      setAuthErr('Error al iniciar sesión')
+    }
   }
 
   if(loading) return <div style={{minHeight:'100vh',background:VOID,display:'flex',alignItems:'center',justifyContent:'center'}}><div className="font-cinzel" style={{color:GD}}>Cargando...</div></div>
@@ -466,13 +501,20 @@ export default function AdminPage() {
           <p className="font-cinzel uppercase tracking-widest mt-1" style={{fontSize:9,color:GD}}>Admin Panel</p>
         </div>
         <form onSubmit={handleLogin} style={{background:CARD,border:`1px solid ${BORDER}`,borderRadius:12,padding:24}}>
-          {[['Email',email,setEmail,'email'],['Contraseña',password,setPassword,'password']].map(([l,v,s,t]:any)=>(
-            <div key={l} style={{marginBottom:14}}>
-              <p className="font-cinzel uppercase tracking-widest mb-1" style={{fontSize:9,color:GD}}>{l}</p>
-              <input type={t} value={v} onChange={(e:any)=>s(e.target.value)} required className="font-rajdhani w-full"
-                style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'10px 14px',color:'#e8e0d0',fontSize:15}}/>
-            </div>
-          ))}
+          <div style={{marginBottom:14}}>
+            <p className="font-cinzel uppercase tracking-widest mb-1" style={{fontSize:9,color:GD}}>Usuario</p>
+            <input type="text" value={username} onChange={e=>setUsername(e.target.value)} required
+              autoComplete="username" placeholder="jcwhite"
+              className="font-rajdhani w-full"
+              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'10px 14px',color:'#e8e0d0',fontSize:15}}/>
+          </div>
+          <div style={{marginBottom:14}}>
+            <p className="font-cinzel uppercase tracking-widest mb-1" style={{fontSize:9,color:GD}}>Contraseña</p>
+            <input type="password" value={password} onChange={e=>setPassword(e.target.value)} required
+              autoComplete="current-password"
+              className="font-rajdhani w-full"
+              style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'10px 14px',color:'#e8e0d0',fontSize:15}}/>
+          </div>
           {authErr&&<p className="font-rajdhani mb-3" style={{color:'#e04040',fontSize:13}}>{authErr}</p>}
           <button type="submit" className="font-cinzel uppercase tracking-widest w-full"
             style={{fontSize:12,padding:14,borderRadius:8,background:`linear-gradient(135deg,#8a6020,#c9a84c)`,border:'none',color:VOID,cursor:'pointer',fontWeight:700}}>
@@ -678,7 +720,7 @@ const FV_RUNES_ADMIN = [
   {key:'piercing', label:'Piercing'},
   {key:'riven',    label:'Riven Soul'},
   {key:'favor',    label:'Favor'},
-  ${key:'prayer',   label:'Prayer'},
+  {key:'prayer',   label:'Prayer'},
   {key:'scroll_ring', label:'Scroll Ring'},
 ] as const
 
