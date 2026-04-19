@@ -2,12 +2,17 @@
 // Server-Sent Events endpoint — pushes realtime updates to the web app
 // when Discord sends a new report/claim
 import { NextRequest } from 'next/server'
+
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
 import { createClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL ?? '',
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
+  )
+}
 
 export async function GET(req: NextRequest) {
   const encoder = new TextEncoder()
@@ -72,7 +77,7 @@ export async function GET(req: NextRequest) {
       // Cleanup when client disconnects
       req.signal.addEventListener('abort', () => {
         clearInterval(heartbeat)
-        supabase.removeChannel(channel)
+        getSupabase().removeChannel(channel)
         controller.close()
       })
     }

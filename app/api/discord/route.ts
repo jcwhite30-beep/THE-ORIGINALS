@@ -1,11 +1,17 @@
 // app/api/discord/route.ts
 import { NextRequest, NextResponse } from 'next/server'
+
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
 import { createClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-)
+// Lazy client — avoids crash if env vars missing at build time
+function getSupabase() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL ?? '',
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
+  )
+}
 
 function norm(s:string){return s.replace(/\*/g,'').toLowerCase().trim()}
 function lev(a:string,b:string):number{
@@ -17,7 +23,7 @@ function lev(a:string,b:string):number{
 function sim(a:string,b:string):number{const s1=norm(a),s2=norm(b);if(s1===s2)return 1;const mx=Math.max(s1.length,s2.length);return mx===0?1:1-lev(s1,s2)/mx}
 
 async function findPlayer(raw:string){
-  const{data:players}=await supabase.from('players').select('id,name,chars').eq('is_active',true)
+  const{data:players}=await getSupabase().from('players').select('id,name,chars').eq('is_active',true)
   if(!players)return null
   let best:{id:string;name:string;score:number}|null=null
   for(const p of players){
@@ -49,7 +55,7 @@ async function saveMaze(names:{rawName:string;isSupport:boolean}[],mazeType:'BD'
   const unique=names.filter(n=>{const k=norm(n.rawName);if(seen.has(k))return false;seen.add(k);return true})
   if(!unique.length)return{reply:'⚠️ Sin participantes válidos.'}
   const pts=parseFloat((5/unique.length).toFixed(4))
-  const{data:sess,error:sErr}=await supabase.from('maze_sessions').insert({
+  const{data:sess,error:sErr}=await getSupabase().from('maze_sessions').insert({
     maze_type:mazeType,total_points:5,admin_points:0,event_points:0,session_date:sessionDate,
     raw_report:`Discord: ${by} — ${unique.map(n=>n.rawName).join(', ')}`
   }).select('id').single()
@@ -59,17 +65,17 @@ async function saveMaze(names:{rawName:string;isSupport:boolean}[],mazeType:'BD'
     const player=await findPlayer(entry.rawName)
     if(player&&!seenIds.has(player.id)){
       seenIds.add(player.id)
-      await supabase.from('player_points').insert({player_id:player.id,session_id:sess.id,points:pts})
-      const{data:cur}=await supabase.from('players').select('total_score,available_pts').eq('id',player.id).single()
-      if(cur)await supabase.from('players').update({total_score:Number(cur.total_score)+pts,available_pts:Number(cur.available_pts)+pts}).eq('id',player.id)
-      await supabase.from('maze_attendance').upsert({session_id:sess.id,player_id:player.id,attended:true,points_earned:pts,is_support:entry.isSupport})
+      await getSupabase().from('player_points').insert({player_id:player.id,session_id:sess.id,points:pts})
+      const{data:cur}=await getSupabase().from('players').select('total_score,available_pts').eq('id',player.id).single()
+      if(cur)await getSupabase().from('players').update({total_score:Number(cur.total_score)+pts,available_pts:Number(cur.available_pts)+pts}).eq('id',player.id)
+      await getSupabase().from('maze_attendance').upsert({session_id:sess.id,player_id:player.id,attended:true,points_earned:pts,is_support:entry.isSupport})
       matched.push(`${entry.rawName}${entry.isSupport?' ★':''}  →  ${player.name}`)
     }else if(!player){
       notFound.push(entry.rawName)
-      await supabase.from('point_alerts').insert({raw_name:entry.rawName,session_id:sess.id})
+      await getSupabase().from('point_alerts').insert({raw_name:entry.rawName,session_id:sess.id})
     }
   }
-  await supabase.from('report_dates').upsert({maze_type:mazeType,last_date:sessionDate})
+  await getSupabase().from('report_dates').upsert({maze_type:mazeType,last_date:sessionDate})
   return{reply:[
     `✅ **Maze ${mazeType} — ${sessionDate}**`,
     `📊 **${matched.length} jugadores · ${pts} pts c/u**`,
@@ -90,7 +96,7 @@ export async function POST(req:NextRequest){
 
   // /ranking
   if(type==='command'&&content?.startsWith('/ranking')){
-    const{data:lb}=await supabase.from('public_leaderboard').select('name,available_points,claims_available,total_claims').order('available_points',{ascending:false}).limit(10)
+    const{data:lb}=await getSupabase().from('public_leaderboard').select('name,available_points,claims_available,total_claims').order('available_points',{ascending:false}).limit(10)
     if(!lb?.length)return NextResponse.json({reply:'Sin datos aún.'})
     const medals=['🥇','🥈','🥉']
     return NextResponse.json({reply:`📊 **TOP 10 — THE ORIGINALS**\n\n${lb.map((p,i)=>`${medals[i]??`${i+1}.`} **${p.name}** — ${Number(p.available_points).toFixed(2)} pts · ${p.claims_available} claims disp.`).join('\n')}`})
@@ -101,7 +107,7 @@ export async function POST(req:NextRequest){
     const pName=content.replace('/puntos','').trim()
     const player=await findPlayer(pName)
     if(!player)return NextResponse.json({reply:`❌ \`${pName}\` no encontrado.`})
-    const{data:p}=await supabase.from('public_leaderboard').select('*').eq('id',player.id).single()
+    const{data:p}=await getSupabase().from('public_leaderboard').select('*').eq('id',player.id).single()
     if(!p)return NextResponse.json({reply:'❌ Error.'})
     return NextResponse.json({reply:`👤 **${p.name}**\n💰 Pts: **${Number(p.available_points).toFixed(2)}**\n🏆 Claims disp.: **${p.claims_available}**\n✅ Claims realizados: **${p.total_claims}**`})
   }
@@ -122,7 +128,7 @@ export async function POST(req:NextRequest){
     if(!player) return NextResponse.json({reply:`❌ Jugador \`${searchName}\` no encontrado. ¿Está registrado en el sistema?`})
     
     const ptsTotal = qty * 5
-    const{data:cur}=await supabase.from('players').select('available_pts').eq('id',player.id).single()
+    const{data:cur}=await getSupabase().from('players').select('available_pts').eq('id',player.id).single()
     const avail = Number(cur?.available_pts??0)
     
     if(!cur||avail<ptsTotal){
@@ -139,8 +145,8 @@ export async function POST(req:NextRequest){
       notes: `Discord claim (${mazeType||'BD'}) por ${authorName}`,
       approved: false
     }))
-    await supabase.from('claims').insert(claimsToInsert)
-    await supabase.from('players').update({available_pts: avail - ptsTotal}).eq('id',player.id)
+    await getSupabase().from('claims').insert(claimsToInsert)
+    await getSupabase().from('players').update({available_pts: avail - ptsTotal}).eq('id',player.id)
     
     return NextResponse.json({reply:[
       `🏆 **${qty} claim(s) registrado(s) — ${player.name}**`,
@@ -153,7 +159,7 @@ export async function POST(req:NextRequest){
   // boss kill
   if(type==='boss_kill'){
     const bType=channelName?.includes('frozen')||channelName?.includes('fv')?'FV':'BD'
-    await supabase.from('boss_posts').insert({boss_type:bType,player_name:authorName,kill_date:date,notes:content||null})
+    await getSupabase().from('boss_posts').insert({boss_type:bType,player_name:authorName,kill_date:date,notes:content||null})
     return NextResponse.json({reply:null})
   }
 
@@ -179,7 +185,7 @@ export async function POST(req:NextRequest){
   // mark_processed — bot tells us a message was handled
   if(type==='mark_processed'&&body.messageId){
     try {
-      await supabase.from('discord_processed_messages').upsert({
+      await getSupabase().from('discord_processed_messages').upsert({
         message_id: body.messageId,
         channel_name: channelName||'',
         status: 'processed'
