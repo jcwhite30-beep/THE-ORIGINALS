@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Rajdhani:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --gold: #c9a84c;
+  --gold-light: #f0d080;
+  --gold-dim: #7a6030;
+  --bg-void: #04040e;
+  --bg-deep: #07071a;
+  --bg-card: #0c0c22;
+  --bg-hover: #12122e;
+  --border: #1e1e40;
+  --border-gold: #c9a84c40;
+  --red: #e03030;
+  --blue-ice: #4ab8f0;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg-void);
+  color: #e8e0d0;
+  font-family: 'Rajdhani', sans-serif;
+  min-height: 100vh;
+}
+
+.font-cinzel { font-family: 'Cinzel', serif; }
+.font-rajdhani { font-family: 'Rajdhani', sans-serif; }
+
+/* Gold gradient text */
+.text-gold-gradient {
+  background: linear-gradient(135deg, #f0d080 0%, #c9a84c 50%, #8a6020 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg-deep); }
+::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--gold); }
+
+/* Rune card glow on hover */
+.rune-card:hover { box-shadow: 0 0 12px #c9a84c22; }
+
+/* Input focus gold */
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--gold) !important;
+}
+
+/* Animated border */
+@keyframes borderGlow {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.animate-border { animation: borderGlow 3s ease-in-out infinite; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.fade-in { animation: fadeIn 0.3s ease-out forwards; }
+
+/* Skeleton pulse */
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #0c0c22 25%, #14142e 50%, #0c0c22 75%);
+  background-size: 800px 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
