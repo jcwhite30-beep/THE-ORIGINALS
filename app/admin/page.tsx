@@ -475,8 +475,14 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
     try{
       const result=await extractMazeFromImage(imageFile)
       setVisionRawText(result.rawText)
-      if(!result.success||result.entries.length===0){
-        showToast({msg:result.error||'No se detectaron participantes en la imagen',type:'warn'})
+      if(!result.success){
+        const msg=result.error||'Error al leer la imagen'
+        showToast({msg,type:'err'})
+        setStep('upload')
+        return
+      }
+      if(result.entries.length===0){
+        showToast({msg:'La IA no detectó participantes. Usa texto manual.',type:'warn'})
         setStep('upload');return
       }
       // Auto-fill all detected fields
@@ -485,9 +491,11 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
       if(result.sessionTime) setSessionTime(result.sessionTime)
       if(result.looter)      setLooter(result.looter)
       setRawEntries(result.entries)
-      // Go to edit step so user can review before processing
       setStep('edit')
-    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'});setStep('upload')}
+    }catch(e:any){
+      showToast({msg:'Error: '+e.message,type:'err'})
+      setStep('upload')
+    }
   }
 
   // ── Step 2: User reviews/edits, then resolves chars ─────────

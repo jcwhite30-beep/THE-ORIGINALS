@@ -1,18 +1,27 @@
 // app/api/vision/route.ts
-// Server-side proxy for Claude Vision — browser can't call api.anthropic.com directly
+// Server-side vision — requires ANTHROPIC_API_KEY in Vercel env vars
 import { NextRequest, NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
-export const runtime = 'nodejs'
+export const runtime  = 'nodejs'
+export const maxDuration = 30
 
 export async function POST(req: NextRequest) {
+  const apiKey = process.env.ANTHROPIC_API_KEY || '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'
+
+  let base64: string, mediaType: string
   try {
-    const { base64, mediaType } = await req.json()
-    if (!base64) return NextResponse.json({ error: 'No image data' }, { status: 400 })
+    const body = await req.json()
+    base64    = body.base64
+    mediaType = body.mediaType || 'image/jpeg'
+    if (!base64) throw new Error('No image data')
+  } catch {
+    return NextResponse.json({ error: 'Datos de imagen inválidos' }, { status: 400 })
+  }
 
-    const prompt = `You are reading a Tales of Pirates guild maze/lair report image from Discord or WhatsApp.
+  const prompt = `You are reading a Tales of Pirates guild maze/lair report image.
 
-Extract ALL information visible. Respond ONLY with valid JSON, no markdown, no explanation:
+Extract ALL visible information. Return ONLY valid JSON, no markdown:
 
 {
   "mazeType": "BD" or "FV" or "unknown",
@@ -27,73 +36,82 @@ Extract ALL information visible. Respond ONLY with valid JSON, no markdown, no e
 }
 
 Rules:
-- mazeType: "Bd lair" or "BD lair" or "Black Dragon" → "BD"; "Frozen Ville" or "FV" → "FV"
-- sessionDate: dates like "15/03/2026", "03/15/2026" → convert to YYYY-MM-DD
-- sessionTime: times like "21:00", "03:00am" → convert to 24h format HH:MM
-- looter: look for "Loot on [name]", "Loot by [name]", "Win/[name]" — the char who got the loot
-- entries: ALL participant character names in the message list
-  - isSupport=true if name has * suffix (apoyo mágico) e.g. "Western*"  
-  - isLooter=true for the char who got the loot
-- Common names: Morgan, Gokuld, Maryn, Neones, AlexGhotico, Latina, Ultimate, Stylegood, Western, LinkaToP, Linka, Legilas, Prometeo, UlisesPat, Gaviria, Tyler, B4D, Marin10, Diego, Socrates, Luis, Kio`
+- mazeType: "Bd lair" / "BD lair" / "Black Dragon" → "BD"; "Frozen Ville" / "FV" → "FV"
+- sessionDate: parse any date format (DD/MM/YYYY, MM/DD/YYYY) → YYYY-MM-DD
+- sessionTime: parse any time (21:00, 9pm, 03:00am) → 24h HH:MM
+- looter: look for "Loot on X", "Loot by X", "Win/X", "X on loot" — extract just the char name
+- entries: ALL participant names in the list. isSupport=true if name has * (apoyo mágico). isLooter=true for the looter.
+- Common names: Gokuld, Stylegood, Western, Neones, Legilas, Alexghotico, Linka, Morgan, Maryn, Prometeo, UlisesPat, Gaviria, Tyler, Latina, Ultimate, Diego, Marin10, Luis, Kio`
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
+  try {
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method:  'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY || '',
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-opus-4-6',
-        max_tokens: 1200,
+        model:      'claude-haiku-4-5-20251001',  // fastest + cheapest
+        max_tokens: 1024,
         messages: [{
           role: 'user',
           content: [
-            {
-              type: 'image',
-              source: { type: 'base64', media_type: mediaType || 'image/jpeg', data: base64 }
-            },
-            { type: 'text', text: prompt }
+            { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } },
+            { type: 'text',  text: prompt }
           ]
         }]
       })
     })
 
-    if (!response.ok) {
-      const err = await response.text()
-      console.error('Anthropic API error:', err)
-      return NextResponse.json({ error: 'Vision API error: ' + response.status }, { status: 500 })
+    const data = await resp.json()
+
+    if (!resp.ok) {
+      console.error('Anthropic error:', JSON.stringify(data))
+      return NextResponse.json({
+        error: `Anthropic API error ${resp.status}: ${data?.error?.message ?? JSON.stringify(data)}`
+      }, { status: 500 })
     }
 
-    const data = await response.json()
     const rawText = data.content?.[0]?.text ?? ''
 
-    // Parse JSON
-    let parsed: any
+    // Parse JSON — try multiple strategies
+    let parsed: any = null
     try {
       parsed = JSON.parse(rawText.replace(/```json|```/g, '').trim())
     } catch {
-      // Try to extract JSON from text
       const match = rawText.match(/\{[\s\S]*\}/)
       if (match) {
-        try { parsed = JSON.parse(match[0]) } catch { /* fall through */ }
-      }
-      if (!parsed) {
-        return NextResponse.json({ error: 'Could not parse vision response', rawText }, { status: 500 })
+        try { parsed = JSON.parse(match[0]) } catch { /* noop */ }
       }
     }
 
+    if (!parsed) {
+      console.error('Could not parse vision response:', rawText)
+      return NextResponse.json({ error: 'No se pudo interpretar la imagen. Intenta con texto manual.', rawText }, { status: 500 })
+    }
+
+    const entries = (parsed.entries ?? [])
+      .filter((e: any) => typeof e.rawName === 'string' && e.rawName.trim().length > 0)
+      .map((e: any, i: number) => ({
+        rawName:   e.rawName.replace(/\*/g, '').trim(),
+        isSupport: Boolean(e.isSupport),
+        isLooter:  Boolean(e.isLooter),
+        order:     i
+      }))
+
     return NextResponse.json({
-      success: true,
+      success:     true,
       mazeType:    parsed.mazeType    ?? 'unknown',
       sessionDate: parsed.sessionDate ?? null,
       sessionTime: parsed.sessionTime ?? null,
       looter:      parsed.looter      ?? null,
-      entries:     (parsed.entries ?? []).filter((e: any) => e.rawName?.trim()),
+      entries,
       rawText
     })
+
   } catch (err: any) {
-    console.error('Vision route error:', err)
-    return NextResponse.json({ error: err.message }, { status: 500 })
+    console.error('Vision route exception:', err)
+    return NextResponse.json({ error: err.message ?? 'Error interno' }, { status: 500 })
   }
 }
