@@ -428,35 +428,41 @@ interface PendingChar {
 // ─── MAZES TAB — Vision powered ───────────────────────────────
 // ══════════════════════════════════════════════════════════════
 function MazesTab({showToast}:{showToast:(t:TT)=>void}){
-  // Config
   const [mazeType,setMazeType]=useState<MazeType>('BD')
-  const [adminSlot,setAdminSlot]=useState(false)  // include admin slot in distribution
-  const [eventSlot,setEventSlot]=useState(false)  // include guild events slot
+  const [adminSlot,setAdminSlot]=useState(false)
+  const [eventSlot,setEventSlot]=useState(false)
   const [sessionDate,setSessionDate]=useState(new Date().toISOString().split('T')[0])
-  // Image
+  const [sessionTime,setSessionTime]=useState('')
+  const [looter,setLooter]=useState('')
   const [imageFile,setImageFile]=useState<File|null>(null)
   const [imagePreview,setImagePreview]=useState<string|null>(null)
   const fileRef=useRef<HTMLInputElement>(null)
-  // States
   const [step,setStep]=useState<'idle'|'reading'|'resolving'|'preview'|'saving'>('idle')
-  const [rawExtracted,setRawExtracted]=useState<ExtractedEntry[]>([])
   const [pending,setPending]=useState<PendingChar[]>([])
   const [allPlayers,setAllPlayers]=useState<{id:string;name:string;chars:string}[]>([])
-  const [confirmed,setConfirmed]=useState<{playerId:string;playerName:string;rawName:string;isSupport:boolean;points:number}[]>([])
+  const [confirmed,setConfirmed]=useState<{playerId:string;playerName:string;rawName:string;isSupport:boolean;isLooter:boolean;points:number}[]>([])
   const [visionRawText,setVisionRawText]=useState('')
-  // Manual paste fallback
   const [showPaste,setShowPaste]=useState(false)
   const [pasteText,setPasteText]=useState('')
-
-  const dist=calcPointDistribution(5, confirmed.length, adminSlot?1:0, eventSlot?1:0)
-  const share=dist.playerPts
 
   useEffect(()=>{
     supabase.from('players').select('id,name,chars').eq('is_active',true)
       .then(({data})=>setAllPlayers(data??[]))
   },[])
 
-  // ── Step 1: Read image with Vision ───────────────────────────
+  // Points calculated from confirmed list length + slots
+  function getDist(playerCount:number){
+    return calcPointDistribution(5, playerCount, adminSlot?1:0, eventSlot?1:0)
+  }
+
+  function resetAll(){
+    setStep('idle');setImageFile(null);setImagePreview(null)
+    setPending([]);setConfirmed([]);setVisionRawText('')
+    setSessionTime('');setLooter('')
+    if(fileRef.current)fileRef.current.value=''
+  }
+
+  // ── Step 1: Vision read ─────────────────────────────────────
   async function handleReadImage(){
     if(!imageFile)return
     setStep('reading')
@@ -464,310 +470,303 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
       const result=await extractMazeFromImage(imageFile)
       setVisionRawText(result.rawText)
       if(!result.success||result.entries.length===0){
-        showToast({msg:result.error||'No se detectaron participantes en la imagen',type:'warn'})
+        showToast({msg:result.error||'No se detectaron participantes',type:'warn'})
         setStep('idle');return
       }
-      // Auto-detect maze type and date
       if(result.mazeType!=='unknown') setMazeType(result.mazeType as MazeType)
       if(result.sessionDate) setSessionDate(result.sessionDate)
-      setRawExtracted(result.entries)
+      if(result.sessionTime) setSessionTime(result.sessionTime)
+      if(result.looter)      setLooter(result.looter)
       await resolveChars(result.entries)
-    }catch(e:any){
-      showToast({msg:'Error: '+e.message,type:'err'});setStep('idle')
-    }
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'});setStep('idle')}
   }
 
-  // ── Step 2: Match each char to players ───────────────────────
-  async function resolveChars(entries: ExtractedEntry[]){
+  // ── Step 2: Resolve chars to players ───────────────────────
+  async function resolveChars(entries:ExtractedEntry[]){
     setStep('resolving')
-    const pendingList: PendingChar[]=[]
-    const seenNames=new Set<string>()   // dedup within session
-
+    const pendingList:PendingChar[]=[]
+    const seenNames=new Set<string>()
     for(const entry of entries){
       const cleanRaw=normalizeName(entry.rawName)
-      
-      // Deduplicate: same char twice in image
       if(seenNames.has(cleanRaw)){
         pendingList.push({rawName:entry.rawName,isSupport:entry.isSupport,options:[],isDuplicate:true})
         continue
       }
       seenNames.add(cleanRaw)
-
-      // Search in players.name AND players.chars
-      const matches: {id:string;name:string;chars:string;score:number}[]=[]
+      const matches:{id:string;name:string;chars:string;score:number}[]=[]
       for(const p of allPlayers){
-        // Match against player name
-        const nameSim=similarity(cleanRaw,normalizeName(p.name))
-        if(nameSim>0.65) matches.push({...p,score:nameSim})
-        // Match against each char
-        else if(p.chars){
-          const charList=p.chars.split(/[,;\/]/).map((c:string)=>c.trim())
-          for(const ch of charList){
-            const cs=similarity(cleanRaw,normalizeName(ch))
+        const ns=similarity(cleanRaw,normalizeName(p.name))
+        if(ns>0.65){matches.push({...p,score:ns});continue}
+        if(p.chars){
+          for(const ch of p.chars.split(/[,;\/]/)){
+            const cs=similarity(cleanRaw,normalizeName(ch.trim()))
             if(cs>0.65){matches.push({...p,score:cs});break}
           }
         }
       }
-      // Sort by score
       matches.sort((a,b)=>b.score-a.score)
-      // Remove duplicate player entries (same player matched via name and char)
       const unique=matches.filter((m,i)=>matches.findIndex(x=>x.id===m.id)===i).slice(0,4)
-
-      // Auto-resolve if perfect match (score >= 0.95)
-      if(unique.length>0&&unique[0].score>=0.95){
-        pendingList.push({
-          rawName:entry.rawName, isSupport:entry.isSupport,
-          options:unique, action:'match',
-          resolvedPlayerId:unique[0].id, resolvedPlayerName:unique[0].name
-        })
+      if(unique.length>0&&unique[0].score>=0.92){
+        pendingList.push({rawName:entry.rawName,isSupport:entry.isSupport,options:unique,
+          action:'match',resolvedPlayerId:unique[0].id,resolvedPlayerName:unique[0].name})
       } else {
         pendingList.push({rawName:entry.rawName,isSupport:entry.isSupport,options:unique})
       }
     }
     setPending(pendingList)
-    setStep('resolving')
   }
 
-  // ── Resolve action for a pending char ────────────────────────
   function resolvePending(idx:number,action:ResolveAction,playerId?:string,playerName?:string){
-    setPending(prev=>{
-      const next=[...prev]
-      next[idx]={...next[idx],action,resolvedPlayerId:playerId,resolvedPlayerName:playerName}
-      return next
-    })
+    setPending(prev=>{const n=[...prev];n[idx]={...n[idx],action,resolvedPlayerId:playerId,resolvedPlayerName:playerName};return n})
   }
 
   async function createAndResolve(idx:number,name:string){
-    const {data,error}=await supabase.from('players').insert({name,is_active:true}).select('id').single()
+    const{data,error}=await supabase.from('players').insert({name,is_active:true}).select('id').single()
     if(error||!data){showToast({msg:'Error al crear jugador',type:'err'});return}
-    // Also add char to new player
     await supabase.from('players').update({chars:name}).eq('id',data.id)
     resolvePending(idx,'newplayer',data.id,name)
     setAllPlayers(p=>[...p,{id:data.id,name,chars:name}])
     showToast({msg:`Jugador "${name}" creado`,type:'ok'})
   }
 
-  // ── Step 3: Build confirmed list and go to preview ───────────
+  // ── Step 3: Build preview ───────────────────────────────────
   function buildPreview(){
-    const pts=share
-    const list=pending
-      .filter(p=>!p.isDuplicate&&p.action!=='skip'&&p.resolvedPlayerId)
-      .map(p=>({
-        playerId:p.resolvedPlayerId!,
-        playerName:p.resolvedPlayerName!,
-        rawName:p.rawName,
-        isSupport:p.isSupport,
-        points:pts
-      }))
-    // Check for duplicate player IDs (same player resolved twice)
+    const resolved=pending.filter(p=>!p.isDuplicate&&p.action!=='skip'&&p.resolvedPlayerId)
     const seenIds=new Set<string>()
-    const dedupList=list.filter(e=>{
-      if(seenIds.has(e.playerId)){
-        showToast({msg:`Duplicado detectado: ${e.playerName} — solo se contará una vez`,type:'warn'})
-        return false
+    const dedup=resolved.filter(p=>{
+      if(seenIds.has(p.resolvedPlayerId!)){
+        showToast({msg:`Duplicado: ${p.resolvedPlayerName} — solo cuenta una vez`,type:'warn'});return false
       }
-      seenIds.add(e.playerId);return true
+      seenIds.add(p.resolvedPlayerId!);return true
     })
-    setConfirmed(dedupList)
+    const dist=getDist(dedup.length)
+    const list=dedup.map(p=>({
+      playerId:p.resolvedPlayerId!,playerName:p.resolvedPlayerName!,
+      rawName:p.rawName,isSupport:p.isSupport,
+      isLooter:normalizeName(p.rawName)===normalizeName(looter),
+      points:dist.playerPts
+    }))
+    setConfirmed(list)
     setStep('preview')
   }
 
-  // ── Step 4: Save session ──────────────────────────────────────
+  // ── Step 4: Save everything ─────────────────────────────────
   async function handleSave(){
     if(!confirmed.length){showToast({msg:'Sin participantes confirmados',type:'warn'});return}
     setStep('saving')
     try{
+      const dist=getDist(confirmed.length)
+      // 1. Create maze session
       const session=await createMazeSession({
-        maze_type:mazeType,
-        total_points:5,
-        admin_points: dist.adminPts,   // same per-slot as players, INVISIBLE to public
-        event_points: dist.eventPts,   // same per-slot as players
+        maze_type:mazeType, total_points:5,
+        admin_points:dist.adminPts,
+        event_points:dist.eventPts,
         session_date:sessionDate,
-        raw_report:visionRawText
+        session_time:sessionTime||null,
+        raw_report:visionRawText||`Manual: ${confirmed.map(e=>e.rawName).join(', ')}`
       })
-      // Credit admin player if admin slot is enabled
-      if(adminSlot&&dist.adminPts>0){
-        const{data:adminPlayer}=await supabase.from('players').select('id').eq('name','Administrador').single()
-        if(adminPlayer){
-          await supabase.from('player_points').insert({player_id:adminPlayer.id,session_id:session.id,points:dist.adminPts})
-          const{data:cur}=await supabase.from('players').select('total_score,available_pts').eq('id',adminPlayer.id).single()
-          if(cur)await supabase.from('players').update({
-            total_score:Number(cur.total_score)+dist.adminPts,
-            available_pts:Number(cur.available_pts)+dist.adminPts
-          }).eq('id',adminPlayer.id)
-        }
-      }
+      // 2. Credit each player
       for(const entry of confirmed){
         await addPlayerPoints(entry.playerId,session.id,entry.points)
         await supabase.from('maze_attendance').upsert({
           session_id:session.id,player_id:entry.playerId,
-          attended:true,points_earned:entry.points,is_support:entry.isSupport
+          attended:true,points_earned:entry.points,is_support:entry.isSupport,
+          is_looter:entry.isLooter
         })
       }
+      // 3. Credit admin player (same per-slot points, invisible to public)
+      if(adminSlot&&dist.adminPts>0){
+        const{data:adm}=await supabase.from('players').select('id,total_score,available_pts').eq('name','Administrador').maybeSingle()
+        if(adm){
+          await supabase.from('player_points').insert({player_id:adm.id,session_id:session.id,points:dist.adminPts})
+          await supabase.from('players').update({
+            total_score:Number(adm.total_score)+dist.adminPts,
+            available_pts:Number(adm.available_pts)+dist.adminPts
+          }).eq('id',adm.id)
+        }
+      }
+      // 4. Credit guild events (visible in dashboard)
+      if(eventSlot&&dist.eventPts>0){
+        const{data:ev}=await supabase.from('players').select('id,total_score,available_pts').eq('name','Guild EVENTS').maybeSingle()
+        if(ev){
+          await supabase.from('player_points').insert({player_id:ev.id,session_id:session.id,points:dist.eventPts})
+          await supabase.from('players').update({
+            total_score:Number(ev.total_score)+dist.eventPts,
+            available_pts:Number(ev.available_pts)+dist.eventPts
+          }).eq('id',ev.id)
+        }
+      }
+      // 5. Update last report date
       await updateReportDate(mazeType,sessionDate)
-      showToast({msg:`✓ Sesión guardada — ${confirmed.length} jugadores`,type:'ok'})
-      // Reset
-      setStep('idle');setImageFile(null);setImagePreview(null);setPending([]);setConfirmed([]);setRawExtracted([])
-      if(fileRef.current)fileRef.current.value=''
-    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'});setStep('preview')}
+      showToast({msg:`✓ Sesión guardada — ${confirmed.length} jugadores · ${dist.perSlot} pts/slot`,type:'ok'})
+      resetAll()
+    }catch(e:any){showToast({msg:'Error al guardar: '+e.message,type:'err'});setStep('preview')}
   }
 
-  // ── Paste fallback ────────────────────────────────────────────
+  // ── Paste fallback ──────────────────────────────────────────
   async function handlePaste(){
     const lines=pasteText.split(/\n/).map(l=>l.trim()).filter(Boolean)
-    const entries:ExtractedEntry[]=lines.map((line,i)=>{
-      const isSupport=line.includes('*')
-      return {rawName:line.replace(/\*/g,'').trim(),isSupport,isLooter:false,order:i}
-    }).filter(e=>e.rawName.length>0)
-    setRawExtracted(entries)
+    const entries:ExtractedEntry[]=lines.map((line,i)=>({
+      rawName:line.replace(/\*/g,'').trim(),isSupport:line.includes('*'),isLooter:false,order:i
+    })).filter(e=>e.rawName.length>0)
     await resolveChars(entries)
     setShowPaste(false)
   }
 
   const unresolvedCount=pending.filter(p=>!p.isDuplicate&&!p.action).length
   const col=(t:MazeType)=>t==='BD'?'#e05050':'#4ab8f0'
+  const previewDist=getDist(confirmed.length)
 
   return (
     <div style={{maxWidth:760}}>
 
-      {/* ── CONFIG ── */}
+      {/* CONFIG */}
       <Card title="⚙️ Configuración del Maze">
         <div style={{display:'flex',gap:8,marginBottom:14}}>
           {(['BD','FV'] as MazeType[]).map(t=>(
             <button key={t} onClick={()=>setMazeType(t)} style={{flex:1,padding:'9px',borderRadius:8,
-              border:`1px solid ${mazeType===t?col(t):BORDER}`,
-              background:mazeType===t?`${col(t)}18`:'transparent',
-              color:mazeType===t?col(t):'#666',
-              cursor:'pointer',fontFamily:'Cinzel,serif',fontSize:10,textTransform:'uppercase',letterSpacing:'0.1em'}}>
+              border:`1px solid ${mazeType===t?col(t):BORDER}`,background:mazeType===t?`${col(t)}18`:'transparent',
+              color:mazeType===t?col(t):'#666',cursor:'pointer',fontFamily:'Cinzel,serif',fontSize:10,textTransform:'uppercase',letterSpacing:'0.1em'}}>
               {t==='BD'?'🐉 Black Dragon':'❄️ Frozen Ville'}
             </button>
           ))}
         </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8,marginBottom:10}}>
           <Inp label="Fecha" value={sessionDate} onChange={setSessionDate} type="date"/>
-          <div>
-            <div style={{fontSize:9,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:6}}>Slot Administrador</div>
-            <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 10px',background:DEEP,borderRadius:6,border:`1px solid ${adminSlot?G:BORDER}`}}>
-              <input type="checkbox" checked={adminSlot} onChange={e=>setAdminSlot(e.target.checked)}/>
-              <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:adminSlot?G:'#888'}}>
-                {adminSlot?'✓ Incluir (privado)':'Sin slot admin'}
-              </span>
-            </label>
-          </div>
-          <div>
-            <div style={{fontSize:9,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:6}}>Slot Guild Events</div>
-            <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 10px',background:DEEP,borderRadius:6,border:`1px solid ${eventSlot?'#40d0a0':BORDER}`}}>
-              <input type="checkbox" checked={eventSlot} onChange={e=>setEventSlot(e.target.checked)}/>
-              <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:eventSlot?'#40d0a0':'#888'}}>
-                {eventSlot?'✓ Incluir':'Sin slot events'}
-              </span>
-            </label>
-          </div>
+          <Inp label="Hora" value={sessionTime} onChange={setSessionTime} placeholder="21:00"/>
+          <Inp label="Looter" value={looter} onChange={setLooter} placeholder="Nombre del char"/>
+          <div/>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
+          {/* Admin slot checkbox */}
+          <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 12px',
+            background:DEEP,borderRadius:6,border:`1px solid ${adminSlot?G:BORDER}`}}>
+            <input type="checkbox" checked={adminSlot} onChange={e=>setAdminSlot(e.target.checked)}
+              style={{accentColor:G,width:14,height:14}}/>
+            <div>
+              <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:adminSlot?G:'#888'}}>
+                Slot Administrador
+              </div>
+              <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#555'}}>
+                {adminSlot?'Pago privado de gestión':'No incluir'}
+              </div>
+            </div>
+          </label>
+          {/* Event slot checkbox */}
+          <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 12px',
+            background:DEEP,borderRadius:6,border:`1px solid ${eventSlot?'#40d0a0':BORDER}`}}>
+            <input type="checkbox" checked={eventSlot} onChange={e=>setEventSlot(e.target.checked)}
+              style={{accentColor:'#40d0a0',width:14,height:14}}/>
+            <div>
+              <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:eventSlot?'#40d0a0':'#888'}}>
+                Slot Guild Events
+              </div>
+              <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#555'}}>
+                {eventSlot?'Visible en dashboard':'No incluir'}
+              </div>
+            </div>
+          </label>
         </div>
       </Card>
 
-      {/* ── IMAGE UPLOAD ── */}
+      {/* IMAGE UPLOAD */}
       {step==='idle'&&(
         <Card title="📸 Subir o Pegar Imagen del Reporte">
-          <div
-            style={{border:`2px dashed ${BORDER}`,borderRadius:10,padding:'20px',textAlign:'center',marginBottom:12,cursor:'pointer',background:imagePreview?'transparent':DEEP}}
+          <PasteImageListener onImage={(f)=>{setImageFile(f);setImagePreview(URL.createObjectURL(f))}}/>
+          <div style={{border:`2px dashed ${BORDER}`,borderRadius:10,padding:'20px',textAlign:'center',
+            marginBottom:12,cursor:'pointer',background:imagePreview?'transparent':DEEP}}
             onClick={()=>fileRef.current?.click()}
-            onDrop={e=>{
-              e.preventDefault()
-              const f=e.dataTransfer.files?.[0]??null
-              if(f&&f.type.startsWith('image/')){
-                setImageFile(f)
-                setImagePreview(URL.createObjectURL(f))
-              }
-            }}
-            onDragOver={e=>e.preventDefault()}
-            onPaste={e=>{
-              // Allow pasting image with Ctrl+V directly on this area
-              const item=Array.from(e.clipboardData.items).find(i=>i.type.startsWith('image/'))
-              if(item){const f=item.getAsFile();if(f){setImageFile(f);setImagePreview(URL.createObjectURL(f))}}
-            }}
-            tabIndex={0}
-          >
+            onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f?.type.startsWith('image/')){setImageFile(f);setImagePreview(URL.createObjectURL(f))}}}
+            onDragOver={e=>e.preventDefault()}>
             {imagePreview
-              ? <img src={imagePreview} alt="preview" style={{maxWidth:'100%',maxHeight:300,borderRadius:8,objectFit:'contain'}}/>
-              : <div>
-                  <div style={{fontSize:32,marginBottom:8}}>📷</div>
-                  <p style={{fontFamily:'Cinzel,serif',fontSize:10,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em'}}>Toca · Arrastra · o Pega con Ctrl+V</p>
-                  <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#444',marginTop:4}}>Screenshot de WhatsApp, Discord o del juego</p>
-                </div>
+              ?<img src={imagePreview} alt="reporte" style={{maxWidth:'100%',maxHeight:300,borderRadius:8,objectFit:'contain'}}/>
+              :<div>
+                <div style={{fontSize:32,marginBottom:8}}>📷</div>
+                <p style={{fontFamily:'Cinzel,serif',fontSize:10,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em'}}>
+                  Toca · Arrastra · o Pega con Ctrl+V
+                </p>
+                <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#444',marginTop:4}}>
+                  Screenshot de WhatsApp, Discord o del juego
+                </p>
+              </div>
             }
           </div>
           <input ref={fileRef} type="file" accept="image/*" style={{display:'none'}}
-            onChange={e=>{
-              const f=e.target.files?.[0]??null;setImageFile(f)
-              if(f){const url=URL.createObjectURL(f);setImagePreview(url)}
-            }}/>
-          {/* Global paste listener — Ctrl+V anywhere on the page */}
-          {step==='idle'&&<PasteImageListener onImage={(f)=>{setImageFile(f);setImagePreview(URL.createObjectURL(f))}}/>}
+            onChange={e=>{const f=e.target.files?.[0];if(f){setImageFile(f);setImagePreview(URL.createObjectURL(f))}}}/>
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
             {imageFile&&<Btn onClick={handleReadImage} bg='gold'>🔍 Leer con IA</Btn>}
             {imageFile&&<Btn onClick={()=>{setImageFile(null);setImagePreview(null);if(fileRef.current)fileRef.current.value=''}} color='#e04040'>✕ Quitar</Btn>}
-            <Btn onClick={()=>setShowPaste(v=>!v)} color='#888'>✏ Ingresar texto manual</Btn>
+            <Btn onClick={()=>setShowPaste(v=>!v)} color='#888'>✏ Texto manual</Btn>
           </div>
           {showPaste&&(
             <div style={{marginTop:12}}>
               <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666',marginBottom:6}}>
-                Un nombre por línea. Agrega * para apoyo mágico: <code style={{color:G}}>Morgan*</code>
+                Un nombre por línea · agrega <code style={{color:G}}>*</code> para apoyo mágico
               </p>
               <textarea rows={8} value={pasteText} onChange={e=>setPasteText(e.target.value)}
-                placeholder={"Gokuld\nMaryn\nNeones\nMorgan*\nAlexghotico\nLatina\nUltimate"}
-                style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'monospace',resize:'vertical',boxSizing:'border-box'}}/>
+                placeholder={"Gokuld\nStylegood\nWestern*\nNeones*\nLegilas\nAlexghotico\nLinka*\nWin/Legilas\nLinka on loot"}
+                style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,
+                  padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'monospace',
+                  resize:'vertical',boxSizing:'border-box'}}/>
               <div style={{marginTop:8}}>
-                <Btn onClick={handlePaste} bg='gold' disabled={!pasteText.trim()}>▶ Procesar lista</Btn>
+                <Btn onClick={handlePaste} bg='gold' disabled={!pasteText.trim()}>▶ Procesar</Btn>
               </div>
             </div>
           )}
         </Card>
       )}
 
-      {/* ── READING ── */}
+      {/* READING */}
       {step==='reading'&&(
-        <Card title="🤖 Analizando imagen...">
+        <Card title="🤖 Leyendo imagen con IA...">
           <div style={{textAlign:'center',padding:'32px'}}>
             <div style={{fontSize:40,marginBottom:12}}>🔍</div>
-            <p style={{fontFamily:'Cinzel,serif',fontSize:12,color:G,letterSpacing:'0.1em',textTransform:'uppercase'}}>Claude está leyendo el reporte...</p>
-            <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#666',marginTop:8}}>Extrayendo nombres de participantes de la imagen</p>
+            <p style={{fontFamily:'Cinzel,serif',fontSize:12,color:G,letterSpacing:'0.1em',textTransform:'uppercase'}}>
+              Claude está analizando el reporte...
+            </p>
+            <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#666',marginTop:8}}>
+              Extrayendo nombres, fecha, hora y looter
+            </p>
           </div>
         </Card>
       )}
 
-      {/* ── RESOLVING ── */}
+      {/* RESOLVING */}
       {step==='resolving'&&pending.length>0&&(
         <div>
-          {/* Header */}
-          <div style={{background:CARD,border:`1px solid ${G}40`,borderRadius:12,padding:'12px 16px',marginBottom:12,display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
-            <div>
-              <span style={{fontFamily:'Cinzel,serif',fontSize:11,color:G,textTransform:'uppercase',letterSpacing:'0.1em'}}>
-                {pending.length} chars detectados
-              </span>
-              {unresolvedCount>0&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#f0a020',marginLeft:12}}>
-                ⚠ {unresolvedCount} sin resolver
-              </span>}
+          {/* Info detected */}
+          {(sessionTime||looter)&&(
+            <div style={{background:CARD,border:`1px solid ${G}40`,borderRadius:10,padding:'10px 16px',marginBottom:10,display:'flex',gap:16,flexWrap:'wrap'}}>
+              {sessionDate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#888'}}>📅 <strong style={{color:'#e8e0d0'}}>{sessionDate}</strong></span>}
+              {sessionTime&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#888'}}>🕐 <strong style={{color:'#e8e0d0'}}>{sessionTime}</strong></span>}
+              {looter&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#888'}}>🏆 Looter: <strong style={{color:G}}>{looter}</strong></span>}
             </div>
-            {unresolvedCount===0&&(
-              <Btn onClick={buildPreview} bg='gold'>▶ Continuar a vista previa</Btn>
-            )}
+          )}
+
+          {/* Header */}
+          <div style={{background:CARD,border:`1px solid ${G}40`,borderRadius:12,padding:'12px 16px',marginBottom:10,
+            display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+            <span style={{fontFamily:'Cinzel,serif',fontSize:11,color:G,textTransform:'uppercase',letterSpacing:'0.1em'}}>
+              {pending.length} chars detectados
+              {unresolvedCount>0&&<span style={{color:'#f0a020',marginLeft:12}}>⚠ {unresolvedCount} sin resolver</span>}
+            </span>
+            {unresolvedCount===0&&<Btn onClick={buildPreview} bg='gold'>▶ Continuar →</Btn>}
           </div>
 
-          {/* Each char */}
+          {/* Each char card */}
           {pending.map((p,idx)=>{
-            const isResolved=!!p.action&&p.action!=='skip'
-            const isSkipped=p.action==='skip'
-            const borderCol=p.isDuplicate?'#555':isResolved?'#20a060':isSkipped?'#555':'#a06020'
+            const bc=p.isDuplicate?'#555':p.action?'#20a060':p.action==='skip'?'#555':'#a06020'
             return (
-              <div key={idx} style={{background:CARD,border:`1px solid ${borderCol}`,borderRadius:10,padding:'12px 14px',marginBottom:8}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8,flexWrap:'wrap',gap:6}}>
+              <div key={idx} style={{background:CARD,border:`1px solid ${bc}`,borderRadius:10,padding:'12px 14px',marginBottom:8}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,flexWrap:'wrap',gap:6}}>
                   <div>
                     <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:'#e8e0d0',fontSize:15}}>
                       {p.rawName.replace(/\*/g,'')}
                     </span>
-                    {p.isSupport&&<span style={{color:'#f0a020',marginLeft:6,fontSize:12}}>★ apoyo mágico</span>}
-                    {p.isDuplicate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#888',marginLeft:8}}>— duplicado, se omite</span>}
+                    {p.isSupport&&<span style={{color:'#f0a020',marginLeft:6,fontSize:12}}>★ apoyo</span>}
+                    {normalizeName(p.rawName)===normalizeName(looter)&&looter&&
+                      <span style={{color:G,marginLeft:6,fontSize:12}}>🏆 looter</span>}
+                    {p.isDuplicate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#888',marginLeft:8}}>— duplicado, omitido</span>}
                     {p.action==='match'&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#40d090',marginLeft:8}}>✓ → {p.resolvedPlayerName}</span>}
                     {p.action==='newplayer'&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#40d090',marginLeft:8}}>✓ nuevo → {p.resolvedPlayerName}</span>}
                     {p.action==='skip'&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#888',marginLeft:8}}>— omitido</span>}
@@ -775,38 +774,25 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
                   {!p.isDuplicate&&!p.action&&(
                     <Btn onClick={()=>resolvePending(idx,'skip')} size='sm' color='#555'>Omitir</Btn>
                   )}
-                  {(p.action||p.isDuplicate)&&!p.isDuplicate&&(
+                  {p.action&&!p.isDuplicate&&(
                     <Btn onClick={()=>setPending(prev=>{const n=[...prev];n[idx]={...n[idx],action:undefined,resolvedPlayerId:undefined,resolvedPlayerName:undefined};return n})} size='sm' color='#888'>↩ Cambiar</Btn>
                   )}
                 </div>
-
-                {/* Options — only when unresolved and not duplicate */}
                 {!p.isDuplicate&&!p.action&&(
                   <div>
                     {p.options.length>0&&(
-                      <div>
-                        <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#888',marginBottom:6}}>¿A cuál jugador pertenece este char?</p>
-                        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
-                          {p.options.map(opt=>(
-                            <button key={opt.id} onClick={()=>resolvePending(idx,'match',opt.id,opt.name)}
-                              style={{padding:'6px 12px',borderRadius:6,
-                                border:`1px solid ${opt.score>0.85?'#20a060':'#3a3a5a'}`,
-                                background:opt.score>0.85?'#0a2a1a':'transparent',
-                                color:'#e8e0d0',cursor:'pointer',fontFamily:'Rajdhani,sans-serif',fontSize:13}}>
-                              <strong style={{color:opt.score>0.85?'#40d090':G}}>{opt.name}</strong>
-                              <span style={{color:'#555',marginLeft:4,fontSize:10}}>{Math.round(opt.score*100)}%</span>
-                              {opt.chars&&<div style={{fontSize:10,color:'#666'}}>{opt.chars.slice(0,40)}</div>}
-                            </button>
-                          ))}
-                        </div>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
+                        {p.options.map(opt=>(
+                          <button key={opt.id} onClick={()=>resolvePending(idx,'match',opt.id,opt.name)}
+                            style={{padding:'6px 12px',borderRadius:6,cursor:'pointer',fontFamily:'Rajdhani,sans-serif',fontSize:13,
+                              border:`1px solid ${opt.score>0.85?'#20a060':'#3a3a5a'}`,
+                              background:opt.score>0.85?'#0a2a1a':'transparent',color:'#e8e0d0'}}>
+                            <strong style={{color:opt.score>0.85?'#40d090':G}}>{opt.name}</strong>
+                            <span style={{color:'#555',fontSize:10,marginLeft:4}}>{Math.round(opt.score*100)}%</span>
+                          </button>
+                        ))}
                       </div>
                     )}
-                    {p.options.length===0&&(
-                      <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#a06020',marginBottom:8}}>
-                        ⚠ No se encontró ningún jugador con este nombre en la base de datos.
-                      </p>
-                    )}
-                    {/* Search all players */}
                     <SearchPlayerForChar rawName={p.rawName} allPlayers={allPlayers}
                       onSelect={(id,name)=>resolvePending(idx,'match',id,name)}
                       onCreateNew={()=>createAndResolve(idx,p.rawName.replace(/\*/g,'').trim())}/>
@@ -815,63 +801,73 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
               </div>
             )
           })}
-
-          {unresolvedCount===0&&pending.filter(p=>!p.isDuplicate&&p.action!=='skip').length>0&&(
-            <div style={{marginTop:12}}>
-              <Btn onClick={buildPreview} bg='gold'>▶ Continuar a vista previa →</Btn>
-            </div>
+          {unresolvedCount===0&&confirmed.length===0&&(
+            <div style={{marginTop:12}}><Btn onClick={buildPreview} bg='gold'>▶ Continuar a vista previa →</Btn></div>
           )}
         </div>
       )}
 
-      {/* ── PREVIEW ── */}
+      {/* PREVIEW + SAVE */}
       {(step==='preview'||step==='saving')&&(()=>{
         const isSaving=step==='saving'
         return (
-        <Card title={`✅ Vista previa — ${confirmed.length} jugadores confirmados`} color='#20a06040'>
-          <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'10px 14px',marginBottom:14}}>
-            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:13}}>Pts/slot: </span>
-            <span style={{fontFamily:'Cinzel,serif',fontWeight:700,fontSize:20,color:G}}>{share}</span>
-            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12,marginLeft:8}}>
-              ({dist.totalSlots} slots totales: {confirmed.length} jugadores
-              {adminSlot?' + 1 admin':''}
-              {eventSlot?' + 1 events':''}
-              · {confirmed.filter(e=>e.isSupport).length} ★ apoyos)
-            </span>
-          </div>
-          <div style={{maxHeight:320,overflowY:'auto',marginBottom:14}}>
-            {confirmed.map((e,i)=>(
-              <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',
-                padding:'8px 0',borderBottom:i<confirmed.length-1?`1px solid #0f0f20`:'none'}}>
+          <Card title={`✅ Vista previa — ${confirmed.length} jugadores`} color='#20a06040'>
+            {/* Distribution info */}
+            <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'10px 14px',marginBottom:12}}>
+              <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'baseline'}}>
                 <div>
-                  <span style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:13}}>{e.playerName}</span>
-                  <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555',marginLeft:8}}>{e.rawName}</span>
-                  {e.isSupport&&<span style={{color:'#f0a020',marginLeft:6,fontSize:12}}>★</span>}
+                  <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:12}}>Pts/slot: </span>
+                  <span style={{fontFamily:'Cinzel,serif',fontWeight:700,fontSize:18,color:G}}>{previewDist.perSlot}</span>
                 </div>
-                <div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:14}}>{e.points} pts</span>
-                  <button onClick={()=>setConfirmed(prev=>prev.filter((_,j)=>j!==i))}
-                    style={{color:'#e04040',background:'none',border:'none',cursor:'pointer',fontSize:14}}>✕</button>
-                </div>
+                <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12}}>
+                  {previewDist.totalSlots} slots totales
+                  {adminSlot&&<span style={{color:'#888'}}> · admin privado</span>}
+                  {eventSlot&&<span style={{color:'#40d0a0'}}> · guild events</span>}
+                </span>
               </div>
-            ))}
-          </div>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-            <Btn onClick={handleSave} bg='gold' disabled={isSaving}>{isSaving?'Guardando...':'💾 Guardar Sesión'}</Btn>
-            <Btn onClick={()=>setStep('resolving')} color='#888'>← Revisar</Btn>
-            <Btn onClick={()=>{setStep('idle');setPending([]);setConfirmed([]);setImageFile(null);setImagePreview(null);if(fileRef.current)fileRef.current.value=''}} color='#555'>✕ Cancelar</Btn>
-          </div>
-        </Card>
+              <div style={{display:'flex',gap:12,marginTop:6,flexWrap:'wrap'}}>
+                {sessionDate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666'}}>📅 {sessionDate}</span>}
+                {sessionTime&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666'}}>🕐 {sessionTime}</span>}
+                {looter&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:G}}>🏆 Looter: {looter}</span>}
+              </div>
+            </div>
+            {/* Player list */}
+            <div style={{maxHeight:320,overflowY:'auto',marginBottom:14}}>
+              {confirmed.map((e,i)=>(
+                <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+                  padding:'7px 0',borderBottom:i<confirmed.length-1?`1px solid #0f0f20`:'none'}}>
+                  <div>
+                    <span style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:13}}>{e.playerName}</span>
+                    <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555',marginLeft:8}}>{e.rawName}</span>
+                    {e.isSupport&&<span style={{color:'#f0a020',marginLeft:6,fontSize:11}}>★</span>}
+                    {e.isLooter&&<span style={{color:G,marginLeft:6,fontSize:11}}>🏆</span>}
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:14}}>{e.points} pts</span>
+                    <button onClick={()=>setConfirmed(prev=>prev.filter((_,j)=>j!==i))}
+                      style={{color:'#e04040',background:'none',border:'none',cursor:'pointer',fontSize:14,lineHeight:1}}>✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              <Btn onClick={handleSave} bg='gold' disabled={isSaving}>
+                {isSaving?'💾 Guardando...':'💾 Guardar Sesión'}
+              </Btn>
+              <Btn onClick={()=>setStep('resolving')} color='#888'>← Revisar</Btn>
+              <Btn onClick={resetAll} color='#555'>✕ Cancelar</Btn>
+            </div>
+          </Card>
         )
       })()}
 
-      {/* ── DISCORD PENDING REPORTS ── */}
-      <DiscordPendingPanel showToast={showToast} allPlayers={allPlayers}
-        onApproved={()=>{/* refresh handled inside */}}/>
+      {/* DISCORD PENDING */}
+      <DiscordPendingPanel showToast={showToast} allPlayers={allPlayers} onApproved={()=>{}}/>
 
     </div>
   )
 }
+
 
 // ── Inline search helper for resolving chars ──────────────────
 function SearchPlayerForChar({rawName,allPlayers,onSelect,onCreateNew}:{

@@ -30,7 +30,7 @@ export interface GuildEvent {
 export interface MazeSession {
   id: string; maze_type: MazeType; total_points: number
   admin_points: number; event_points: number; participant_pts: number
-  session_date: string; notes?: string; raw_report?: string
+  session_date: string; session_time?: string | null; notes?: string; raw_report?: string
 }
 
 export interface PointAlert {
