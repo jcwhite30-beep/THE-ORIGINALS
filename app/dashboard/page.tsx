@@ -513,7 +513,7 @@ export default function DashboardPage() {
         </div>
 
         {/* ── SEARCH ── */}
-        <div className="relative mb-3" style={{display:'flex',gap:8,alignItems:'center'}}>
+        <div style={{position:'relative',display:'flex',gap:8,alignItems:'center',marginBottom:12}}>
           <div style={{flex:1,position:'relative'}}>
             <input type="text" value={search} onChange={e => { setSearch(e.target.value); setSelected(null) }}
               placeholder="Buscar jugador por nombre, owner o personaje..."

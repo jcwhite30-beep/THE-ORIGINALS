@@ -9,7 +9,7 @@ import {
   getFVRunePoints, upsertFVRunePoints, updateReportDate,
   LeaderboardEntry, Player, PointAlert, Claim, MazeType, Announcement
 } from '@/lib/supabase'
-import { extractMazeFromImage, calcPointShare, normalizeName, similarity, ExtractedEntry, MazeImageResult } from '@/lib/maze-vision'
+import { extractMazeFromImage, calcPointShare, normalizeName, similarity, ExtractedEntry } from '@/lib/maze-vision'
 
 // ─── Design tokens ────────────────────────────────────────────
 const G='#c9a84c', GD='#7a6030', CARD='#0d0d1e', DEEP='#070712', VOID='#04040e', BORDER='#22224a'
@@ -396,6 +396,19 @@ function JugadoresTab({showToast}:{showToast:(t:TT)=>void}){
 // ─── MAZES TAB (Reportes BD y FV) ────────────────────────────
 // ══════════════════════════════════════════════════════════════
 // ─── Types for Vision Maze ───────────────────────────────────
+
+// Global Ctrl+V paste listener — captures images pasted anywhere on page
+function PasteImageListener({onImage}:{onImage:(f:File)=>void}){
+  useEffect(()=>{
+    const handler=(e:ClipboardEvent)=>{
+      const item=Array.from(e.clipboardData?.items??[]).find(i=>i.type.startsWith('image/'))
+      if(item){const f=item.getAsFile();if(f)onImage(f)}
+    }
+    window.addEventListener('paste',handler as EventListener)
+    return()=>window.removeEventListener('paste',handler as EventListener)
+  },[onImage])
+  return null
+}
 type ResolveAction = 'match'|'newplayer'|'skip'
 interface PendingChar {
   rawName: string
