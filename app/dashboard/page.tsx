@@ -417,13 +417,16 @@ export default function DashboardPage() {
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<LeaderboardEntry|null>(null)
 
-  // Stats del Excel (Vista PÚBLICA: jugadores + guild events, sin admin)
-  // Total pts disponibles jugadores: ~469.47 + guild events 148.41 = 617.88 → floor to 5 = 615
-  const TOTAL_PTS_PUBLIC = 615          // redondeado hacia abajo al múltiplo de 5
-  const CLAIMS_DISP_PUBLIC = 123        // 615 / 5 = 123
-  const LOOTS_BANCO = 46               // loots actualmente en banco
-  const LOOTS_FUERA = 77               // loots fuera de banco
-  const EVENTS_AVAIL = 148.41          // puntos disponibles guild events
+  // Stats públicos — calculados dinámicamente desde la DB
+  // Admin y Guild EVENTS están EXCLUIDOS de la vista pública
+  const publicLb = lb.filter(p => p.name !== 'Administrador' && p.name !== 'Guild EVENTS')
+  const publicTotalAvail = publicLb.reduce((s,p) => s + p.available_points, 0)
+  // Redondear al múltiplo de 5 más bajo para claims exactos
+  const TOTAL_PTS_PUBLIC = Math.floor(publicTotalAvail / 5) * 5
+  const CLAIMS_DISP_PUBLIC = Math.floor(TOTAL_PTS_PUBLIC / 5)
+  const LOOTS_BANCO = 46
+  const LOOTS_FUERA = 77
+  const EVENTS_AVAIL = lb.find(p=>p.name==='Guild EVENTS')?.available_points ?? 148.41
 
   async function loadData() {
     const l = await getPublicLeaderboard()
@@ -460,14 +463,14 @@ export default function DashboardPage() {
   }
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return lb
+    if (!search.trim()) return publicLb
     const s = search.toLowerCase()
-    return lb.filter(p =>
+    return publicLb.filter(p =>
       p.name.toLowerCase().includes(s) ||
       (p.owner||'').toLowerCase().includes(s) ||
       (p.chars||'').toLowerCase().includes(s)
     )
-  }, [lb, search])
+  }, [publicLb, search])
 
   // Summary stats
   const totalAvail = lb.reduce((s,p) => s+p.available_points, 0)
@@ -497,7 +500,7 @@ export default function DashboardPage() {
 
         {/* ── TOP STAT CARDS ── */}
         <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,marginBottom:16}}>
-          <StatCard icon="🏆" label="Claims Disponibles" value={loading?'…':CLAIMS_DISP_PUBLIC} sub={`${TOTAL_PTS_PUBLIC} pts totales disponibles`} color={G}/>
+          <StatCard icon="🏆" label="Claims Disponibles" value={loading?'…':CLAIMS_DISP_PUBLIC} sub={`${Number(publicTotalAvail).toFixed(2)} pts disponibles`} color={G}/>
           <StatCard icon="🏦" label="Loots en Banco" value={LOOTS_BANCO} sub="BD loots en banco" color="#4ab8f0"/>
           <StatCard icon="📦" label="Loots Fuera Banco" value={LOOTS_FUERA} sub="BD loots fuera del banco" color="#f0a020"/>
           <StatCard icon="🎪" label="Pts Events Disp." value={f2(EVENTS_AVAIL)} sub="Guild EVENTS disponibles" color="#40d0a0"/>
@@ -535,12 +538,12 @@ export default function DashboardPage() {
 
         {/* ── BD TABLE ── */}
         <div className="mb-5">
-          <BDTable data={filtered} loading={loading} selectedId={selected?.id} onSelect={p=>setSelected(prev=>prev?.id===p.id?null:p)}/>
+          <BDTable data={filtered.filter(p=>p.name!=='Administrador'&&p.name!=='Guild EVENTS')} loading={loading} selectedId={selected?.id} onSelect={p=>setSelected(prev=>prev?.id===p.id?null:p)}/>
         </div>
 
         {/* ── FV TABLE ── */}
         <div className="mb-6">
-          <FVTable data={filtered} loading={loading}/>
+          <FVTable data={filtered.filter(p=>p.name!=='Administrador'&&p.name!=='Guild EVENTS')} loading={loading}/>
         </div>
 
         {/* ── LAST TIME BOSS ── */}

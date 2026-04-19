@@ -9,7 +9,7 @@ import {
   getFVRunePoints, upsertFVRunePoints, updateReportDate,
   LeaderboardEntry, Player, PointAlert, Claim, MazeType, Announcement
 } from '@/lib/supabase'
-import { extractMazeFromImage, calcPointShare, normalizeName, similarity, ExtractedEntry } from '@/lib/maze-vision'
+import { extractMazeFromImage, calcPointDistribution, normalizeName, similarity, ExtractedEntry } from '@/lib/maze-vision'
 
 // ─── Design tokens ────────────────────────────────────────────
 const G='#c9a84c', GD='#7a6030', CARD='#0d0d1e', DEEP='#070712', VOID='#04040e', BORDER='#22224a'
@@ -123,16 +123,20 @@ function RankingTab({showToast,isSuperAdmin}:{showToast:(t:TT)=>void;isSuperAdmi
   }
   useEffect(()=>{load()},[])
 
-  const filtered=useMemo(()=>{
-    if(!search.trim())return lb
-    const s=search.toLowerCase()
-    return lb.filter(p=>p.name.toLowerCase().includes(s)||(p.chars||'').toLowerCase().includes(s))
-  },[lb,search])
+  // Filter out admin and guild events from public list — BEFORE useMemo
+  const adminPlayer=lb.find(p=>p.name==='Administrador')
+  const guildEvents=lb.find(p=>p.name==='Guild EVENTS')
+  const publicLb=lb.filter(p=>p.name!=='Administrador'&&p.name!=='Guild EVENTS')
 
-  // Admin totals (from excel)
-  const adminAvail=132.12, adminTotal=232.12
-  const totalPlayerAvail=lb.reduce((s,p)=>s+p.available_points,0)
-  const grandTotalAvail=totalPlayerAvail+adminAvail+148.41 // +guild events
+  const filtered=useMemo(()=>{
+    if(!search.trim())return publicLb
+    const s=search.toLowerCase()
+    return publicLb.filter(p=>p.name.toLowerCase().includes(s)||(p.chars||'').toLowerCase().includes(s))
+  },[publicLb,search])
+  const adminAvail=adminPlayer?adminPlayer.available_points:0
+  const adminTotal=adminPlayer?adminPlayer.total_points:0
+  const totalPlayerAvail=publicLb.reduce((s,p)=>s+p.available_points,0)
+  const grandTotalAvail=totalPlayerAvail+adminAvail+(guildEvents?.available_points??0)
   const totalClaimsDisp=fi(grandTotalAvail/5)
 
   async function savePlayerPts(p:LeaderboardEntry){
@@ -203,7 +207,7 @@ function RankingTab({showToast,isSuperAdmin}:{showToast:(t:TT)=>void;isSuperAdmi
                   {tdN(f2(adminAvail),'#e05050',14)}
                   {tdN(f2(adminAvail),G,14)}
                   {tdN(fi(adminAvail/5),G,15)}
-                  {tdN(0,'#40d0a0',13)}
+                  {tdN(adminPlayer?.total_claims??0,'#40d0a0',13)}
                   {isSuperAdmin&&<td style={{padding:'9px 10px',textAlign:'center'}}><span style={{color:'#444',fontSize:11}}>—</span></td>}
                 </tr>
                 )}
@@ -426,8 +430,8 @@ interface PendingChar {
 function MazesTab({showToast}:{showToast:(t:TT)=>void}){
   // Config
   const [mazeType,setMazeType]=useState<MazeType>('BD')
-  const [adminPts,setAdminPts]=useState('0')
-  const [eventPts,setEventPts]=useState('0')
+  const [adminSlot,setAdminSlot]=useState(false)  // include admin slot in distribution
+  const [eventSlot,setEventSlot]=useState(false)  // include guild events slot
   const [sessionDate,setSessionDate]=useState(new Date().toISOString().split('T')[0])
   // Image
   const [imageFile,setImageFile]=useState<File|null>(null)
@@ -444,9 +448,8 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
   const [showPaste,setShowPaste]=useState(false)
   const [pasteText,setPasteText]=useState('')
 
-  const ap=parseFloat(adminPts)||0
-  const ep=parseFloat(eventPts)||0
-  const share=calcPointShare(5,ap,ep,confirmed.length)
+  const dist=calcPointDistribution(5, confirmed.length, adminSlot?1:0, eventSlot?1:0)
+  const share=dist.playerPts
 
   useEffect(()=>{
     supabase.from('players').select('id,name,chars').eq('is_active',true)
@@ -575,9 +578,25 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
     setStep('saving')
     try{
       const session=await createMazeSession({
-        maze_type:mazeType,total_points:5,admin_points:ap,
-        event_points:ep,session_date:sessionDate,raw_report:visionRawText
+        maze_type:mazeType,
+        total_points:5,
+        admin_points: dist.adminPts,   // same per-slot as players, INVISIBLE to public
+        event_points: dist.eventPts,   // same per-slot as players
+        session_date:sessionDate,
+        raw_report:visionRawText
       })
+      // Credit admin player if admin slot is enabled
+      if(adminSlot&&dist.adminPts>0){
+        const{data:adminPlayer}=await supabase.from('players').select('id').eq('name','Administrador').single()
+        if(adminPlayer){
+          await supabase.from('player_points').insert({player_id:adminPlayer.id,session_id:session.id,points:dist.adminPts})
+          const{data:cur}=await supabase.from('players').select('total_score,available_pts').eq('id',adminPlayer.id).single()
+          if(cur)await supabase.from('players').update({
+            total_score:Number(cur.total_score)+dist.adminPts,
+            available_pts:Number(cur.available_pts)+dist.adminPts
+          }).eq('id',adminPlayer.id)
+        }
+      }
       for(const entry of confirmed){
         await addPlayerPoints(entry.playerId,session.id,entry.points)
         await supabase.from('maze_attendance').upsert({
@@ -626,8 +645,24 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10}}>
           <Inp label="Fecha" value={sessionDate} onChange={setSessionDate} type="date"/>
-          <Inp label="Pts Admin" value={adminPts} onChange={setAdminPts} type="number"/>
-          <Inp label="Pts Evento" value={eventPts} onChange={setEventPts} type="number"/>
+          <div>
+            <div style={{fontSize:9,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:6}}>Slot Administrador</div>
+            <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 10px',background:DEEP,borderRadius:6,border:`1px solid ${adminSlot?G:BORDER}`}}>
+              <input type="checkbox" checked={adminSlot} onChange={e=>setAdminSlot(e.target.checked)}/>
+              <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:adminSlot?G:'#888'}}>
+                {adminSlot?'✓ Incluir (privado)':'Sin slot admin'}
+              </span>
+            </label>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:6}}>Slot Guild Events</div>
+            <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 10px',background:DEEP,borderRadius:6,border:`1px solid ${eventSlot?'#40d0a0':BORDER}`}}>
+              <input type="checkbox" checked={eventSlot} onChange={e=>setEventSlot(e.target.checked)}/>
+              <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:eventSlot?'#40d0a0':'#888'}}>
+                {eventSlot?'✓ Incluir':'Sin slot events'}
+              </span>
+            </label>
+          </div>
         </div>
       </Card>
 
@@ -795,10 +830,13 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
         return (
         <Card title={`✅ Vista previa — ${confirmed.length} jugadores confirmados`} color='#20a06040'>
           <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'10px 14px',marginBottom:14}}>
-            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:13}}>Pts/participante: </span>
+            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:13}}>Pts/slot: </span>
             <span style={{fontFamily:'Cinzel,serif',fontWeight:700,fontSize:20,color:G}}>{share}</span>
             <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12,marginLeft:8}}>
-              ({confirmed.length} jugadores · {confirmed.filter(e=>e.isSupport).length} apoyos mágicos ★)
+              ({dist.totalSlots} slots totales: {confirmed.length} jugadores
+              {adminSlot?' + 1 admin':''}
+              {eventSlot?' + 1 events':''}
+              · {confirmed.filter(e=>e.isSupport).length} ★ apoyos)
             </span>
           </div>
           <div style={{maxHeight:320,overflowY:'auto',marginBottom:14}}>
