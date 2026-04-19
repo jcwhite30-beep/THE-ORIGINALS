@@ -428,41 +428,47 @@ interface PendingChar {
 // ─── MAZES TAB — Vision powered ───────────────────────────────
 // ══════════════════════════════════════════════════════════════
 function MazesTab({showToast}:{showToast:(t:TT)=>void}){
-  const [mazeType,setMazeType]=useState<MazeType>('BD')
-  const [adminSlot,setAdminSlot]=useState(false)
-  const [eventSlot,setEventSlot]=useState(false)
-  const [sessionDate,setSessionDate]=useState(new Date().toISOString().split('T')[0])
-  const [sessionTime,setSessionTime]=useState('')
-  const [looter,setLooter]=useState('')
+  // ── State ─────────────────────────────────────────────────
   const [imageFile,setImageFile]=useState<File|null>(null)
   const [imagePreview,setImagePreview]=useState<string|null>(null)
   const fileRef=useRef<HTMLInputElement>(null)
-  const [step,setStep]=useState<'idle'|'reading'|'resolving'|'preview'|'saving'>('idle')
+
+  // Extracted & editable fields
+  const [mazeType,setMazeType]=useState<MazeType>('BD')
+  const [sessionDate,setSessionDate]=useState('')
+  const [sessionTime,setSessionTime]=useState('')
+  const [looter,setLooter]=useState('')
+  const [adminSlot,setAdminSlot]=useState(false)
+  const [eventSlot,setEventSlot]=useState(false)
+
+  // Flow steps
+  const [step,setStep]=useState<'upload'|'reading'|'edit'|'resolving'|'preview'|'saving'>('upload')
   const [pending,setPending]=useState<PendingChar[]>([])
   const [allPlayers,setAllPlayers]=useState<{id:string;name:string;chars:string}[]>([])
   const [confirmed,setConfirmed]=useState<{playerId:string;playerName:string;rawName:string;isSupport:boolean;isLooter:boolean;points:number}[]>([])
   const [visionRawText,setVisionRawText]=useState('')
-  const [showPaste,setShowPaste]=useState(false)
+  const [rawEntries,setRawEntries]=useState<ExtractedEntry[]>([])
+
+  // Manual paste
   const [pasteText,setPasteText]=useState('')
+  const [showPaste,setShowPaste]=useState(false)
 
   useEffect(()=>{
     supabase.from('players').select('id,name,chars').eq('is_active',true)
       .then(({data})=>setAllPlayers(data??[]))
   },[])
 
-  // Points calculated from confirmed list length + slots
-  function getDist(playerCount:number){
-    return calcPointDistribution(5, playerCount, adminSlot?1:0, eventSlot?1:0)
-  }
+  function getDist(n:number){ return calcPointDistribution(5,n,adminSlot?1:0,eventSlot?1:0) }
 
   function resetAll(){
-    setStep('idle');setImageFile(null);setImagePreview(null)
-    setPending([]);setConfirmed([]);setVisionRawText('')
-    setSessionTime('');setLooter('')
+    setStep('upload');setImageFile(null);setImagePreview(null)
+    setPending([]);setConfirmed([]);setRawEntries([]);setVisionRawText('')
+    setSessionDate('');setSessionTime('');setLooter('')
+    setAdminSlot(false);setEventSlot(false)
     if(fileRef.current)fileRef.current.value=''
   }
 
-  // ── Step 1: Vision read ─────────────────────────────────────
+  // ── Step 1: IA reads image ──────────────────────────────────
   async function handleReadImage(){
     if(!imageFile)return
     setStep('reading')
@@ -470,38 +476,45 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
       const result=await extractMazeFromImage(imageFile)
       setVisionRawText(result.rawText)
       if(!result.success||result.entries.length===0){
-        showToast({msg:result.error||'No se detectaron participantes',type:'warn'})
-        setStep('idle');return
+        showToast({msg:result.error||'No se detectaron participantes en la imagen',type:'warn'})
+        setStep('upload');return
       }
+      // Auto-fill all detected fields
       if(result.mazeType!=='unknown') setMazeType(result.mazeType as MazeType)
       if(result.sessionDate) setSessionDate(result.sessionDate)
       if(result.sessionTime) setSessionTime(result.sessionTime)
       if(result.looter)      setLooter(result.looter)
-      await resolveChars(result.entries)
-    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'});setStep('idle')}
+      setRawEntries(result.entries)
+      // Go to edit step so user can review before processing
+      setStep('edit')
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'});setStep('upload')}
   }
 
-  // ── Step 2: Resolve chars to players ───────────────────────
-  async function resolveChars(entries:ExtractedEntry[]){
+  // ── Step 2: User reviews/edits, then resolves chars ─────────
+  async function handleProcess(){
     setStep('resolving')
+    const entries=rawEntries.length>0 ? rawEntries
+      : pasteText.split(/\n/).map((l,i)=>({
+          rawName:l.replace(/\*/g,'').trim(),
+          isSupport:l.includes('*'),isLooter:false,order:i
+        })).filter(e=>e.rawName.length>0)
+    await resolveChars(entries)
+  }
+
+  async function resolveChars(entries:ExtractedEntry[]){
     const pendingList:PendingChar[]=[]
-    const seenNames=new Set<string>()
+    const seen=new Set<string>()
     for(const entry of entries){
-      const cleanRaw=normalizeName(entry.rawName)
-      if(seenNames.has(cleanRaw)){
-        pendingList.push({rawName:entry.rawName,isSupport:entry.isSupport,options:[],isDuplicate:true})
-        continue
-      }
-      seenNames.add(cleanRaw)
+      const key=normalizeName(entry.rawName)
+      if(seen.has(key)){pendingList.push({rawName:entry.rawName,isSupport:entry.isSupport,options:[],isDuplicate:true});continue}
+      seen.add(key)
       const matches:{id:string;name:string;chars:string;score:number}[]=[]
       for(const p of allPlayers){
-        const ns=similarity(cleanRaw,normalizeName(p.name))
+        const ns=similarity(key,normalizeName(p.name))
         if(ns>0.65){matches.push({...p,score:ns});continue}
-        if(p.chars){
-          for(const ch of p.chars.split(/[,;\/]/)){
-            const cs=similarity(cleanRaw,normalizeName(ch.trim()))
-            if(cs>0.65){matches.push({...p,score:cs});break}
-          }
+        for(const ch of (p.chars||'').split(/[,;\/]/)){
+          const cs=similarity(key,normalizeName(ch.trim()))
+          if(cs>0.65){matches.push({...p,score:cs});break}
         }
       }
       matches.sort((a,b)=>b.score-a.score)
@@ -514,10 +527,14 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
       }
     }
     setPending(pendingList)
+    setStep('resolving')
   }
 
-  function resolvePending(idx:number,action:ResolveAction,playerId?:string,playerName?:string){
-    setPending(prev=>{const n=[...prev];n[idx]={...n[idx],action,resolvedPlayerId:playerId,resolvedPlayerName:playerName};return n})
+  function resolvePending(idx:number,action:ResolveAction,pid?:string,pname?:string){
+    setPending(prev=>{const n=[...prev];n[idx]={...n[idx],action,resolvedPlayerId:pid,resolvedPlayerName:pname};return n})
+  }
+  function undoResolve(idx:number){
+    setPending(prev=>{const n=[...prev];n[idx]={...n[idx],action:undefined,resolvedPlayerId:undefined,resolvedPlayerName:undefined};return n})
   }
 
   async function createAndResolve(idx:number,name:string){
@@ -526,91 +543,65 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
     await supabase.from('players').update({chars:name}).eq('id',data.id)
     resolvePending(idx,'newplayer',data.id,name)
     setAllPlayers(p=>[...p,{id:data.id,name,chars:name}])
-    showToast({msg:`Jugador "${name}" creado`,type:'ok'})
+    showToast({msg:`✓ Jugador "${name}" creado`,type:'ok'})
   }
 
-  // ── Step 3: Build preview ───────────────────────────────────
   function buildPreview(){
     const resolved=pending.filter(p=>!p.isDuplicate&&p.action!=='skip'&&p.resolvedPlayerId)
     const seenIds=new Set<string>()
     const dedup=resolved.filter(p=>{
       if(seenIds.has(p.resolvedPlayerId!)){
-        showToast({msg:`Duplicado: ${p.resolvedPlayerName} — solo cuenta una vez`,type:'warn'});return false
+        showToast({msg:`Duplicado: ${p.resolvedPlayerName}`,type:'warn'});return false
       }
       seenIds.add(p.resolvedPlayerId!);return true
     })
     const dist=getDist(dedup.length)
-    const list=dedup.map(p=>({
+    setConfirmed(dedup.map(p=>({
       playerId:p.resolvedPlayerId!,playerName:p.resolvedPlayerName!,
       rawName:p.rawName,isSupport:p.isSupport,
       isLooter:normalizeName(p.rawName)===normalizeName(looter),
       points:dist.playerPts
-    }))
-    setConfirmed(list)
+    })))
     setStep('preview')
   }
 
-  // ── Step 4: Save everything ─────────────────────────────────
   async function handleSave(){
-    if(!confirmed.length){showToast({msg:'Sin participantes confirmados',type:'warn'});return}
+    if(!confirmed.length){showToast({msg:'Sin participantes',type:'warn'});return}
+    const sDate=sessionDate||new Date().toISOString().split('T')[0]
     setStep('saving')
     try{
       const dist=getDist(confirmed.length)
-      // 1. Create maze session
       const session=await createMazeSession({
-        maze_type:mazeType, total_points:5,
-        admin_points:dist.adminPts,
-        event_points:dist.eventPts,
-        session_date:sessionDate,
-        session_time:sessionTime||null,
-        raw_report:visionRawText||`Manual: ${confirmed.map(e=>e.rawName).join(', ')}`
+        maze_type:mazeType,total_points:5,
+        admin_points:dist.adminPts,event_points:dist.eventPts,
+        session_date:sDate,session_time:sessionTime||null,
+        raw_report:visionRawText||confirmed.map(e=>e.rawName).join(', ')
       })
-      // 2. Credit each player
-      for(const entry of confirmed){
-        await addPlayerPoints(entry.playerId,session.id,entry.points)
+      for(const e of confirmed){
+        await addPlayerPoints(e.playerId,session.id,e.points)
         await supabase.from('maze_attendance').upsert({
-          session_id:session.id,player_id:entry.playerId,
-          attended:true,points_earned:entry.points,is_support:entry.isSupport,
-          is_looter:entry.isLooter
+          session_id:session.id,player_id:e.playerId,
+          attended:true,points_earned:e.points,is_support:e.isSupport,is_looter:e.isLooter
         })
       }
-      // 3. Credit admin player (same per-slot points, invisible to public)
       if(adminSlot&&dist.adminPts>0){
         const{data:adm}=await supabase.from('players').select('id,total_score,available_pts').eq('name','Administrador').maybeSingle()
         if(adm){
           await supabase.from('player_points').insert({player_id:adm.id,session_id:session.id,points:dist.adminPts})
-          await supabase.from('players').update({
-            total_score:Number(adm.total_score)+dist.adminPts,
-            available_pts:Number(adm.available_pts)+dist.adminPts
-          }).eq('id',adm.id)
+          await supabase.from('players').update({total_score:Number(adm.total_score)+dist.adminPts,available_pts:Number(adm.available_pts)+dist.adminPts}).eq('id',adm.id)
         }
       }
-      // 4. Credit guild events (visible in dashboard)
       if(eventSlot&&dist.eventPts>0){
         const{data:ev}=await supabase.from('players').select('id,total_score,available_pts').eq('name','Guild EVENTS').maybeSingle()
         if(ev){
           await supabase.from('player_points').insert({player_id:ev.id,session_id:session.id,points:dist.eventPts})
-          await supabase.from('players').update({
-            total_score:Number(ev.total_score)+dist.eventPts,
-            available_pts:Number(ev.available_pts)+dist.eventPts
-          }).eq('id',ev.id)
+          await supabase.from('players').update({total_score:Number(ev.total_score)+dist.eventPts,available_pts:Number(ev.available_pts)+dist.eventPts}).eq('id',ev.id)
         }
       }
-      // 5. Update last report date
-      await updateReportDate(mazeType,sessionDate)
-      showToast({msg:`✓ Sesión guardada — ${confirmed.length} jugadores · ${dist.perSlot} pts/slot`,type:'ok'})
+      await updateReportDate(mazeType,sDate)
+      showToast({msg:`✓ Sesión ${mazeType} guardada — ${confirmed.length} jugadores · ${dist.perSlot} pts/slot`,type:'ok'})
       resetAll()
-    }catch(e:any){showToast({msg:'Error al guardar: '+e.message,type:'err'});setStep('preview')}
-  }
-
-  // ── Paste fallback ──────────────────────────────────────────
-  async function handlePaste(){
-    const lines=pasteText.split(/\n/).map(l=>l.trim()).filter(Boolean)
-    const entries:ExtractedEntry[]=lines.map((line,i)=>({
-      rawName:line.replace(/\*/g,'').trim(),isSupport:line.includes('*'),isLooter:false,order:i
-    })).filter(e=>e.rawName.length>0)
-    await resolveChars(entries)
-    setShowPaste(false)
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'});setStep('preview')}
   }
 
   const unresolvedCount=pending.filter(p=>!p.isDuplicate&&!p.action).length
@@ -620,69 +611,22 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
   return (
     <div style={{maxWidth:760}}>
 
-      {/* CONFIG */}
-      <Card title="⚙️ Configuración del Maze">
-        <div style={{display:'flex',gap:8,marginBottom:14}}>
-          {(['BD','FV'] as MazeType[]).map(t=>(
-            <button key={t} onClick={()=>setMazeType(t)} style={{flex:1,padding:'9px',borderRadius:8,
-              border:`1px solid ${mazeType===t?col(t):BORDER}`,background:mazeType===t?`${col(t)}18`:'transparent',
-              color:mazeType===t?col(t):'#666',cursor:'pointer',fontFamily:'Cinzel,serif',fontSize:10,textTransform:'uppercase',letterSpacing:'0.1em'}}>
-              {t==='BD'?'🐉 Black Dragon':'❄️ Frozen Ville'}
-            </button>
-          ))}
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:8,marginBottom:10}}>
-          <Inp label="Fecha" value={sessionDate} onChange={setSessionDate} type="date"/>
-          <Inp label="Hora" value={sessionTime} onChange={setSessionTime} placeholder="21:00"/>
-          <Inp label="Looter" value={looter} onChange={setLooter} placeholder="Nombre del char"/>
-          <div/>
-        </div>
-        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8}}>
-          {/* Admin slot checkbox */}
-          <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 12px',
-            background:DEEP,borderRadius:6,border:`1px solid ${adminSlot?G:BORDER}`}}>
-            <input type="checkbox" checked={adminSlot} onChange={e=>setAdminSlot(e.target.checked)}
-              style={{accentColor:G,width:14,height:14}}/>
-            <div>
-              <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:adminSlot?G:'#888'}}>
-                Slot Administrador
-              </div>
-              <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#555'}}>
-                {adminSlot?'Pago privado de gestión':'No incluir'}
-              </div>
-            </div>
-          </label>
-          {/* Event slot checkbox */}
-          <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 12px',
-            background:DEEP,borderRadius:6,border:`1px solid ${eventSlot?'#40d0a0':BORDER}`}}>
-            <input type="checkbox" checked={eventSlot} onChange={e=>setEventSlot(e.target.checked)}
-              style={{accentColor:'#40d0a0',width:14,height:14}}/>
-            <div>
-              <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:eventSlot?'#40d0a0':'#888'}}>
-                Slot Guild Events
-              </div>
-              <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#555'}}>
-                {eventSlot?'Visible en dashboard':'No incluir'}
-              </div>
-            </div>
-          </label>
-        </div>
-      </Card>
-
-      {/* IMAGE UPLOAD */}
-      {step==='idle'&&(
-        <Card title="📸 Subir o Pegar Imagen del Reporte">
+      {/* ── STEP: UPLOAD ─────────────────────────────────────── */}
+      {step==='upload'&&(
+        <Card title="📸 Reporte de Maze — Sube o Pega la imagen">
           <PasteImageListener onImage={(f)=>{setImageFile(f);setImagePreview(URL.createObjectURL(f))}}/>
-          <div style={{border:`2px dashed ${BORDER}`,borderRadius:10,padding:'20px',textAlign:'center',
-            marginBottom:12,cursor:'pointer',background:imagePreview?'transparent':DEEP}}
-            onClick={()=>fileRef.current?.click()}
+          <div
+            style={{border:`2px dashed ${imageFile?G:BORDER}`,borderRadius:10,padding:'20px',
+              textAlign:'center',marginBottom:12,cursor:'pointer',
+              background:imagePreview?'#050510':DEEP,transition:'border-color 0.2s'}}
+            onClick={()=>!imageFile&&fileRef.current?.click()}
             onDrop={e=>{e.preventDefault();const f=e.dataTransfer.files?.[0];if(f?.type.startsWith('image/')){setImageFile(f);setImagePreview(URL.createObjectURL(f))}}}
             onDragOver={e=>e.preventDefault()}>
             {imagePreview
-              ?<img src={imagePreview} alt="reporte" style={{maxWidth:'100%',maxHeight:300,borderRadius:8,objectFit:'contain'}}/>
+              ?<img src={imagePreview} alt="reporte" style={{maxWidth:'100%',maxHeight:320,borderRadius:8,objectFit:'contain'}}/>
               :<div>
-                <div style={{fontSize:32,marginBottom:8}}>📷</div>
-                <p style={{fontFamily:'Cinzel,serif',fontSize:10,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em'}}>
+                <div style={{fontSize:40,marginBottom:10}}>📷</div>
+                <p style={{fontFamily:'Cinzel,serif',fontSize:10,color:'#555',textTransform:'uppercase',letterSpacing:'0.1em'}}>
                   Toca · Arrastra · o Pega con Ctrl+V
                 </p>
                 <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#444',marginTop:4}}>
@@ -693,159 +637,257 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
           </div>
           <input ref={fileRef} type="file" accept="image/*" style={{display:'none'}}
             onChange={e=>{const f=e.target.files?.[0];if(f){setImageFile(f);setImagePreview(URL.createObjectURL(f))}}}/>
-          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
             {imageFile&&<Btn onClick={handleReadImage} bg='gold'>🔍 Leer con IA</Btn>}
             {imageFile&&<Btn onClick={()=>{setImageFile(null);setImagePreview(null);if(fileRef.current)fileRef.current.value=''}} color='#e04040'>✕ Quitar</Btn>}
             <Btn onClick={()=>setShowPaste(v=>!v)} color='#888'>✏ Texto manual</Btn>
           </div>
           {showPaste&&(
-            <div style={{marginTop:12}}>
+            <div>
               <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666',marginBottom:6}}>
-                Un nombre por línea · agrega <code style={{color:G}}>*</code> para apoyo mágico
+                Un nombre por línea · <code style={{color:G}}>*</code> = apoyo mágico
               </p>
               <textarea rows={8} value={pasteText} onChange={e=>setPasteText(e.target.value)}
-                placeholder={"Gokuld\nStylegood\nWestern*\nNeones*\nLegilas\nAlexghotico\nLinka*\nWin/Legilas\nLinka on loot"}
+                placeholder={"Gokuld\nStylegood\nWestern*\nNeones*\nLegilas\nAlexghotico\nLinka*"}
                 style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,
-                  padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'monospace',
-                  resize:'vertical',boxSizing:'border-box'}}/>
-              <div style={{marginTop:8}}>
-                <Btn onClick={handlePaste} bg='gold' disabled={!pasteText.trim()}>▶ Procesar</Btn>
+                  padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'monospace',resize:'vertical',boxSizing:'border-box'}}/>
+              <div style={{marginTop:8,display:'flex',gap:8,flexWrap:'wrap'}}>
+                <div style={{display:'flex',gap:8}}>
+                  {(['BD','FV'] as MazeType[]).map(t=>(
+                    <button key={t} onClick={()=>setMazeType(t)}
+                      style={{padding:'6px 14px',borderRadius:6,cursor:'pointer',fontFamily:'Cinzel,serif',fontSize:10,
+                        textTransform:'uppercase',letterSpacing:'0.08em',
+                        border:`1px solid ${mazeType===t?col(t):BORDER}`,
+                        background:mazeType===t?`${col(t)}20`:'transparent',
+                        color:mazeType===t?col(t):'#666'}}>
+                      {t==='BD'?'🐉 BD':'❄️ FV'}
+                    </button>
+                  ))}
+                </div>
+                <Btn onClick={()=>{const entries=pasteText.split(/\n/).map((l,i)=>({rawName:l.replace(/\*/g,'').trim(),isSupport:l.includes('*'),isLooter:false,order:i})).filter(e=>e.rawName.length>0);setRawEntries(entries);setStep('edit')}} bg='gold' disabled={!pasteText.trim()}>▶ Continuar</Btn>
               </div>
             </div>
           )}
         </Card>
       )}
 
-      {/* READING */}
+      {/* ── STEP: READING ────────────────────────────────────── */}
       {step==='reading'&&(
-        <Card title="🤖 Leyendo imagen con IA...">
-          <div style={{textAlign:'center',padding:'32px'}}>
-            <div style={{fontSize:40,marginBottom:12}}>🔍</div>
-            <p style={{fontFamily:'Cinzel,serif',fontSize:12,color:G,letterSpacing:'0.1em',textTransform:'uppercase'}}>
-              Claude está analizando el reporte...
+        <Card title="🤖 Leyendo imagen...">
+          <div style={{textAlign:'center',padding:'40px 20px'}}>
+            <div style={{fontSize:44,marginBottom:14}}>🔍</div>
+            <p style={{fontFamily:'Cinzel,serif',fontSize:11,color:G,textTransform:'uppercase',letterSpacing:'0.12em'}}>
+              Claude está analizando el reporte
             </p>
-            <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#666',marginTop:8}}>
-              Extrayendo nombres, fecha, hora y looter
+            <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#555',marginTop:8}}>
+              Extrayendo tipo de maze, fecha, hora, looter y participantes...
             </p>
           </div>
         </Card>
       )}
 
-      {/* RESOLVING */}
+      {/* ── STEP: EDIT (review what IA found, edit before processing) ── */}
+      {step==='edit'&&(
+        <Card title="✏️ Revisar y editar antes de procesar">
+          {/* Maze type buttons */}
+          <div style={{display:'flex',gap:8,marginBottom:14}}>
+            {(['BD','FV'] as MazeType[]).map(t=>(
+              <button key={t} onClick={()=>setMazeType(t)} style={{flex:1,padding:'10px',borderRadius:8,cursor:'pointer',
+                fontFamily:'Cinzel,serif',fontSize:11,textTransform:'uppercase',letterSpacing:'0.1em',
+                border:`1px solid ${mazeType===t?col(t):BORDER}`,
+                background:mazeType===t?`${col(t)}20`:'transparent',
+                color:mazeType===t?col(t):'#555'}}>
+                {t==='BD'?'🐉 Black Dragon':'❄️ Frozen Ville'}
+              </button>
+            ))}
+          </div>
+
+          {/* Date / Time / Looter — editable */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:8,marginBottom:12}}>
+            <div>
+              <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>Fecha</div>
+              <input value={sessionDate} onChange={e=>setSessionDate(e.target.value)} type="date"
+                style={{width:'100%',background:DEEP,border:`1px solid ${sessionDate?G:BORDER}`,borderRadius:6,
+                  padding:'8px 10px',color:'#e8e0d0',fontSize:13,boxSizing:'border-box'}}/>
+            </div>
+            <div>
+              <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>Hora</div>
+              <input value={sessionTime} onChange={e=>setSessionTime(e.target.value)} placeholder="21:00"
+                style={{width:'100%',background:DEEP,border:`1px solid ${sessionTime?G:BORDER}`,borderRadius:6,
+                  padding:'8px 10px',color:'#e8e0d0',fontSize:13,boxSizing:'border-box'}}/>
+            </div>
+            <div>
+              <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>Looter</div>
+              <input value={looter} onChange={e=>setLooter(e.target.value)} placeholder="Nombre del char"
+                style={{width:'100%',background:DEEP,border:`1px solid ${looter?G:BORDER}`,borderRadius:6,
+                  padding:'8px 10px',color:'#e8e0d0',fontSize:13,boxSizing:'border-box'}}/>
+            </div>
+          </div>
+
+          {/* Admin / Event slots */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:14}}>
+            <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 12px',
+              background:DEEP,borderRadius:6,border:`1px solid ${adminSlot?G:BORDER}`}}>
+              <input type="checkbox" checked={adminSlot} onChange={e=>setAdminSlot(e.target.checked)}
+                style={{accentColor:G,width:14,height:14}}/>
+              <div>
+                <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:adminSlot?G:'#777'}}>Slot Admin</div>
+                <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#444'}}>Pago privado</div>
+              </div>
+            </label>
+            <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',padding:'8px 12px',
+              background:DEEP,borderRadius:6,border:`1px solid ${eventSlot?'#40d0a0':BORDER}`}}>
+              <input type="checkbox" checked={eventSlot} onChange={e=>setEventSlot(e.target.checked)}
+                style={{accentColor:'#40d0a0',width:14,height:14}}/>
+              <div>
+                <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:eventSlot?'#40d0a0':'#777'}}>Slot Guild Events</div>
+                <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#444'}}>Visible en dashboard</div>
+              </div>
+            </label>
+          </div>
+
+          {/* Participants list — editable */}
+          <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'10px 14px',marginBottom:14}}>
+            <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:8}}>
+              {rawEntries.length} participantes detectados
+            </div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+              {rawEntries.map((e,i)=>(
+                <div key={i} style={{display:'flex',alignItems:'center',gap:4,padding:'4px 10px',
+                  borderRadius:20,background:CARD,border:`1px solid ${e.isSupport?'#f0a020':BORDER}`}}>
+                  <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#e8e0d0'}}>{e.rawName}</span>
+                  {e.isSupport&&<span style={{color:'#f0a020',fontSize:11}}>★</span>}
+                  {normalizeName(e.rawName)===normalizeName(looter)&&looter&&<span style={{color:G,fontSize:11}}>🏆</span>}
+                  <button onClick={()=>setRawEntries(prev=>prev.filter((_,j)=>j!==i))}
+                    style={{color:'#e04040',background:'none',border:'none',cursor:'pointer',fontSize:12,lineHeight:1,padding:'0 2px'}}>✕</button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <Btn onClick={handleProcess} bg='gold'>▶ Procesar y resolver jugadores</Btn>
+            <Btn onClick={resetAll} color='#555'>← Volver</Btn>
+          </div>
+        </Card>
+      )}
+
+      {/* ── STEP: RESOLVING ──────────────────────────────────── */}
       {step==='resolving'&&pending.length>0&&(
         <div>
-          {/* Info detected */}
-          {(sessionTime||looter)&&(
-            <div style={{background:CARD,border:`1px solid ${G}40`,borderRadius:10,padding:'10px 16px',marginBottom:10,display:'flex',gap:16,flexWrap:'wrap'}}>
-              {sessionDate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#888'}}>📅 <strong style={{color:'#e8e0d0'}}>{sessionDate}</strong></span>}
-              {sessionTime&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#888'}}>🕐 <strong style={{color:'#e8e0d0'}}>{sessionTime}</strong></span>}
-              {looter&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#888'}}>🏆 Looter: <strong style={{color:G}}>{looter}</strong></span>}
-            </div>
-          )}
-
-          {/* Header */}
-          <div style={{background:CARD,border:`1px solid ${G}40`,borderRadius:12,padding:'12px 16px',marginBottom:10,
+          <div style={{background:CARD,border:`1px solid ${G}40`,borderRadius:10,padding:'12px 16px',marginBottom:10,
             display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
-            <span style={{fontFamily:'Cinzel,serif',fontSize:11,color:G,textTransform:'uppercase',letterSpacing:'0.1em'}}>
-              {pending.length} chars detectados
-              {unresolvedCount>0&&<span style={{color:'#f0a020',marginLeft:12}}>⚠ {unresolvedCount} sin resolver</span>}
-            </span>
-            {unresolvedCount===0&&<Btn onClick={buildPreview} bg='gold'>▶ Continuar →</Btn>}
+            <div>
+              <span style={{fontFamily:'Cinzel,serif',fontSize:11,color:G,textTransform:'uppercase',letterSpacing:'0.1em'}}>
+                {pending.filter(p=>!p.isDuplicate).length} participantes
+              </span>
+              {unresolvedCount>0&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#f0a020',marginLeft:12}}>
+                ⚠ {unresolvedCount} sin asignar
+              </span>}
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              {unresolvedCount===0&&<Btn onClick={buildPreview} bg='gold'>▶ Vista previa →</Btn>}
+              <Btn onClick={()=>setStep('edit')} color='#888'>← Editar</Btn>
+            </div>
           </div>
 
-          {/* Each char card */}
-          {pending.map((p,idx)=>{
-            const bc=p.isDuplicate?'#555':p.action?'#20a060':p.action==='skip'?'#555':'#a06020'
-            return (
-              <div key={idx} style={{background:CARD,border:`1px solid ${bc}`,borderRadius:10,padding:'12px 14px',marginBottom:8}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,flexWrap:'wrap',gap:6}}>
-                  <div>
-                    <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:'#e8e0d0',fontSize:15}}>
-                      {p.rawName.replace(/\*/g,'')}
-                    </span>
-                    {p.isSupport&&<span style={{color:'#f0a020',marginLeft:6,fontSize:12}}>★ apoyo</span>}
-                    {normalizeName(p.rawName)===normalizeName(looter)&&looter&&
-                      <span style={{color:G,marginLeft:6,fontSize:12}}>🏆 looter</span>}
-                    {p.isDuplicate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#888',marginLeft:8}}>— duplicado, omitido</span>}
-                    {p.action==='match'&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#40d090',marginLeft:8}}>✓ → {p.resolvedPlayerName}</span>}
-                    {p.action==='newplayer'&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#40d090',marginLeft:8}}>✓ nuevo → {p.resolvedPlayerName}</span>}
-                    {p.action==='skip'&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#888',marginLeft:8}}>— omitido</span>}
-                  </div>
-                  {!p.isDuplicate&&!p.action&&(
-                    <Btn onClick={()=>resolvePending(idx,'skip')} size='sm' color='#555'>Omitir</Btn>
-                  )}
-                  {p.action&&!p.isDuplicate&&(
-                    <Btn onClick={()=>setPending(prev=>{const n=[...prev];n[idx]={...n[idx],action:undefined,resolvedPlayerId:undefined,resolvedPlayerName:undefined};return n})} size='sm' color='#888'>↩ Cambiar</Btn>
-                  )}
+          {pending.map((p,idx)=>(
+            <div key={idx} style={{background:CARD,borderRadius:10,padding:'12px 14px',marginBottom:8,
+              border:`1px solid ${p.isDuplicate?'#333':p.action?'#20a060':'#a06020'}`}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6,flexWrap:'wrap',gap:6}}>
+                <div>
+                  <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:'#e8e0d0',fontSize:14}}>
+                    {p.rawName.replace(/\*/g,'')}
+                  </span>
+                  {p.isSupport&&<span style={{color:'#f0a020',marginLeft:6,fontSize:11}}>★ apoyo</span>}
+                  {normalizeName(p.rawName)===normalizeName(looter)&&looter&&
+                    <span style={{color:G,marginLeft:6,fontSize:11}}>🏆 looter</span>}
+                  {p.isDuplicate&&<span style={{color:'#555',fontSize:11,marginLeft:8}}>— duplicado</span>}
+                  {p.action==='match'&&<span style={{color:'#40d090',fontSize:11,marginLeft:8}}>✓ → {p.resolvedPlayerName}</span>}
+                  {p.action==='newplayer'&&<span style={{color:'#40d090',fontSize:11,marginLeft:8}}>✓ nuevo → {p.resolvedPlayerName}</span>}
+                  {p.action==='skip'&&<span style={{color:'#555',fontSize:11,marginLeft:8}}>— omitido</span>}
                 </div>
-                {!p.isDuplicate&&!p.action&&(
-                  <div>
-                    {p.options.length>0&&(
-                      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
-                        {p.options.map(opt=>(
-                          <button key={opt.id} onClick={()=>resolvePending(idx,'match',opt.id,opt.name)}
-                            style={{padding:'6px 12px',borderRadius:6,cursor:'pointer',fontFamily:'Rajdhani,sans-serif',fontSize:13,
-                              border:`1px solid ${opt.score>0.85?'#20a060':'#3a3a5a'}`,
-                              background:opt.score>0.85?'#0a2a1a':'transparent',color:'#e8e0d0'}}>
-                            <strong style={{color:opt.score>0.85?'#40d090':G}}>{opt.name}</strong>
-                            <span style={{color:'#555',fontSize:10,marginLeft:4}}>{Math.round(opt.score*100)}%</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <SearchPlayerForChar rawName={p.rawName} allPlayers={allPlayers}
-                      onSelect={(id,name)=>resolvePending(idx,'match',id,name)}
-                      onCreateNew={()=>createAndResolve(idx,p.rawName.replace(/\*/g,'').trim())}/>
-                  </div>
-                )}
+                <div style={{display:'flex',gap:6}}>
+                  {!p.isDuplicate&&!p.action&&<Btn onClick={()=>resolvePending(idx,'skip')} size='sm' color='#555'>Omitir</Btn>}
+                  {p.action&&!p.isDuplicate&&<Btn onClick={()=>undoResolve(idx)} size='sm' color='#888'>↩</Btn>}
+                </div>
               </div>
-            )
-          })}
-          {unresolvedCount===0&&confirmed.length===0&&(
+              {!p.isDuplicate&&!p.action&&(
+                <div>
+                  {p.options.length>0&&(
+                    <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:8}}>
+                      {p.options.map(opt=>(
+                        <button key={opt.id} onClick={()=>resolvePending(idx,'match',opt.id,opt.name)}
+                          style={{padding:'6px 12px',borderRadius:6,cursor:'pointer',fontFamily:'Rajdhani,sans-serif',fontSize:13,
+                            border:`1px solid ${opt.score>0.85?'#20a060':'#3a3a5a'}`,
+                            background:opt.score>0.85?'#0a2a1a':'transparent',color:'#e8e0d0'}}>
+                          <strong style={{color:opt.score>0.85?'#40d090':G}}>{opt.name}</strong>
+                          <span style={{color:'#555',fontSize:10,marginLeft:4}}>{Math.round(opt.score*100)}%</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {p.options.length===0&&(
+                    <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#a06020',marginBottom:8}}>
+                      ⚠ No se encontró en la base de datos
+                    </p>
+                  )}
+                  <SearchPlayerForChar rawName={p.rawName} allPlayers={allPlayers}
+                    onSelect={(id,name)=>resolvePending(idx,'match',id,name)}
+                    onCreateNew={()=>createAndResolve(idx,p.rawName.replace(/\*/g,'').trim())}/>
+                </div>
+              )}
+            </div>
+          ))}
+          {unresolvedCount===0&&(
             <div style={{marginTop:12}}><Btn onClick={buildPreview} bg='gold'>▶ Continuar a vista previa →</Btn></div>
           )}
         </div>
       )}
 
-      {/* PREVIEW + SAVE */}
+      {/* ── STEP: PREVIEW + SAVE ─────────────────────────────── */}
       {(step==='preview'||step==='saving')&&(()=>{
         const isSaving=step==='saving'
         return (
           <Card title={`✅ Vista previa — ${confirmed.length} jugadores`} color='#20a06040'>
-            {/* Distribution info */}
+            {/* Session info */}
             <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'10px 14px',marginBottom:12}}>
-              <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'baseline'}}>
+              <div style={{display:'flex',gap:16,flexWrap:'wrap',alignItems:'center',marginBottom:6}}>
                 <div>
                   <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:12}}>Pts/slot: </span>
                   <span style={{fontFamily:'Cinzel,serif',fontWeight:700,fontSize:18,color:G}}>{previewDist.perSlot}</span>
+                  <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:11,marginLeft:8}}>
+                    ({previewDist.totalSlots} slots)
+                    {adminSlot&&<span style={{color:'#888'}}> · admin privado ✓</span>}
+                    {eventSlot&&<span style={{color:'#40d0a0'}}> · events ✓</span>}
+                  </span>
                 </div>
-                <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12}}>
-                  {previewDist.totalSlots} slots totales
-                  {adminSlot&&<span style={{color:'#888'}}> · admin privado</span>}
-                  {eventSlot&&<span style={{color:'#40d0a0'}}> · guild events</span>}
-                </span>
-              </div>
-              <div style={{display:'flex',gap:12,marginTop:6,flexWrap:'wrap'}}>
-                {sessionDate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666'}}>📅 {sessionDate}</span>}
-                {sessionTime&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666'}}>🕐 {sessionTime}</span>}
-                {looter&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:G}}>🏆 Looter: {looter}</span>}
+                <div style={{display:'flex',gap:12,flexWrap:'wrap'}}>
+                  <span style={{fontFamily:'Cinzel,serif',fontSize:10,color:mazeType==='BD'?'#e05050':'#4ab8f0',
+                    textTransform:'uppercase',letterSpacing:'0.1em',fontWeight:700}}>
+                    {mazeType==='BD'?'🐉 BD':'❄️ FV'}
+                  </span>
+                  {sessionDate&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#888'}}>📅 {sessionDate}</span>}
+                  {sessionTime&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#888'}}>🕐 {sessionTime}</span>}
+                  {looter&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:G}}>🏆 {looter}</span>}
+                </div>
               </div>
             </div>
-            {/* Player list */}
-            <div style={{maxHeight:320,overflowY:'auto',marginBottom:14}}>
+            {/* Players */}
+            <div style={{maxHeight:300,overflowY:'auto',marginBottom:14}}>
               {confirmed.map((e,i)=>(
                 <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',
                   padding:'7px 0',borderBottom:i<confirmed.length-1?`1px solid #0f0f20`:'none'}}>
                   <div>
                     <span style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:13}}>{e.playerName}</span>
                     <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555',marginLeft:8}}>{e.rawName}</span>
-                    {e.isSupport&&<span style={{color:'#f0a020',marginLeft:6,fontSize:11}}>★</span>}
-                    {e.isLooter&&<span style={{color:G,marginLeft:6,fontSize:11}}>🏆</span>}
+                    {e.isSupport&&<span style={{color:'#f0a020',marginLeft:5,fontSize:11}}>★</span>}
+                    {e.isLooter&&<span style={{color:G,marginLeft:5,fontSize:11}}>🏆</span>}
                   </div>
-                  <div style={{display:'flex',alignItems:'center',gap:10}}>
-                    <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:14}}>{e.points} pts</span>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:13}}>{e.points} pts</span>
                     <button onClick={()=>setConfirmed(prev=>prev.filter((_,j)=>j!==i))}
-                      style={{color:'#e04040',background:'none',border:'none',cursor:'pointer',fontSize:14,lineHeight:1}}>✕</button>
+                      style={{color:'#e04040',background:'none',border:'none',cursor:'pointer',fontSize:13}}>✕</button>
                   </div>
                 </div>
               ))}
@@ -854,8 +896,8 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
               <Btn onClick={handleSave} bg='gold' disabled={isSaving}>
                 {isSaving?'💾 Guardando...':'💾 Guardar Sesión'}
               </Btn>
-              <Btn onClick={()=>setStep('resolving')} color='#888'>← Revisar</Btn>
-              <Btn onClick={resetAll} color='#555'>✕ Cancelar</Btn>
+              <Btn onClick={()=>setStep('resolving')} color='#888' disabled={isSaving}>← Revisar</Btn>
+              <Btn onClick={resetAll} color='#555' disabled={isSaving}>✕ Cancelar</Btn>
             </div>
           </Card>
         )
