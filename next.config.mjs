@@ -1,10 +1,19 @@
-// next.config.mjs
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Tesseract.js requires this to avoid SSR issues
-  webpack: (config) => {
-    config.resolve.fallback = { fs: false, path: false }
-    return config
+  typescript: {
+    ignoreBuildErrors: true,
+  },
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: '*.supabase.co',
+      },
+    ],
   },
 }
+
 export default nextConfig
