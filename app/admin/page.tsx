@@ -757,7 +757,9 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
       )}
 
       {/* ── PREVIEW ── */}
-      {step==='preview'&&(
+      {(step==='preview'||step==='saving')&&(()=>{
+        const isSaving=step==='saving'
+        return (
         <Card title={`✅ Vista previa — ${confirmed.length} jugadores confirmados`} color='#20a06040'>
           <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'10px 14px',marginBottom:14}}>
             <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:13}}>Pts/participante: </span>
@@ -784,12 +786,13 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
             ))}
           </div>
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
-            <Btn onClick={handleSave} bg='gold' disabled={step==='saving'}>{step==='saving'?'Guardando...':'💾 Guardar Sesión'}</Btn>
+            <Btn onClick={handleSave} bg='gold' disabled={isSaving}>{isSaving?'Guardando...':'💾 Guardar Sesión'}</Btn>
             <Btn onClick={()=>setStep('resolving')} color='#888'>← Revisar</Btn>
             <Btn onClick={()=>{setStep('idle');setPending([]);setConfirmed([]);setImageFile(null);setImagePreview(null);if(fileRef.current)fileRef.current.value=''}} color='#555'>✕ Cancelar</Btn>
           </div>
         </Card>
-      )}
+        )
+      })()}
 
     </div>
   )
