@@ -794,6 +794,10 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
         )
       })()}
 
+      {/* ── DISCORD PENDING REPORTS ── */}
+      <DiscordPendingPanel showToast={showToast} allPlayers={allPlayers}
+        onApproved={()=>{/* refresh handled inside */}}/>
+
     </div>
   )
 }
@@ -831,6 +835,153 @@ function SearchPlayerForChar({rawName,allPlayers,onSelect,onCreateNew}:{
     </div>
   )
 }
+// ══════════════════════════════════════════════════════════════
+// ─── DISCORD PENDING REPORTS PANEL ───────────────────────────
+// Shows unregistered reports detected from Discord history
+// ══════════════════════════════════════════════════════════════
+function DiscordPendingPanel({showToast,allPlayers,onApproved}:{
+  showToast:(t:TT)=>void
+  allPlayers:{id:string;name:string;chars:string}[]
+  onApproved:()=>void
+}){
+  const [reports,setReports]=useState<any[]>([])
+  const [busy,setBusy]=useState<string|null>(null)
+  const [lastSync,setLastSync]=useState<string|null>(null)
+
+  async function load(){
+    const{data}=await supabase.from('discord_pending_reports')
+      .select('*').eq('status','pending').order('created_at',{ascending:false}).limit(20)
+    setReports(data??[])
+  }
+  useEffect(()=>{load()},[])
+
+  // Realtime: auto-refresh when new pending reports arrive from Discord
+  useEffect(()=>{
+    const channel=supabase.channel('discord-pending')
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'discord_pending_reports'},
+        payload=>{
+          setReports(prev=>[payload.new as any,...prev])
+          setLastSync(new Date().toLocaleTimeString('es-PA'))
+          showToast({msg:'📡 Nuevo reporte detectado desde Discord',type:'ok'})
+        })
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'players'},
+        ()=>setLastSync(new Date().toLocaleTimeString('es-PA')))
+      .subscribe()
+    return()=>{supabase.removeChannel(channel)}
+  },[])
+
+  async function approve(report:any){
+    setBusy(report.id)
+    try{
+      // Process each detected name
+      const names=(report.detected_names as string[]).map(n=>({
+        rawName:n.replace(/\*/g,'').trim(), isSupport:n.includes('*')
+      }))
+      const pts=parseFloat((5/names.length).toFixed(4))
+
+      // Create session
+      const{data:sess}=await supabase.from('maze_sessions').insert({
+        maze_type:report.maze_type, total_points:5, admin_points:0, event_points:0,
+        session_date:report.session_date||new Date().toISOString().split('T')[0],
+        raw_report:`Discord (pendiente aprobado): ${report.author_name} — ${names.map(n=>n.rawName).join(', ')}`
+      }).select('id').single()
+      if(!sess) throw new Error('Error creando sesión')
+
+      // Match and credit players
+      const seenIds=new Set<string>()
+      for(const entry of names){
+        const{data:pl}=await supabase.from('players').select('id,total_score,available_pts')
+          .or(`name.ilike.%${entry.rawName}%,chars.ilike.%${entry.rawName}%`).limit(1)
+        if(pl?.length&&!seenIds.has(pl[0].id)){
+          seenIds.add(pl[0].id)
+          await supabase.from('player_points').insert({player_id:pl[0].id,session_id:sess.id,points:pts})
+          await supabase.from('players').update({
+            total_score:Number(pl[0].total_score)+pts,
+            available_pts:Number(pl[0].available_pts)+pts
+          }).eq('id',pl[0].id)
+          await supabase.from('maze_attendance').upsert({
+            session_id:sess.id,player_id:pl[0].id,attended:true,
+            points_earned:pts,is_support:entry.isSupport
+          })
+        }
+      }
+      // Mark as approved and processed
+      await supabase.from('discord_pending_reports').update({status:'approved'}).eq('id',report.id)
+      await supabase.from('discord_processed_messages').upsert({
+        message_id:report.message_id,channel_name:report.channel_name,status:'processed',session_id:sess.id
+      })
+      await supabase.from('report_dates').upsert({maze_type:report.maze_type,last_date:report.session_date})
+      showToast({msg:`✓ Sesión ${report.maze_type} aprobada`,type:'ok'})
+      load(); onApproved()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    finally{setBusy(null)}
+  }
+
+  async function reject(id:string){
+    await supabase.from('discord_pending_reports').update({status:'rejected'}).eq('id',id)
+    setReports(prev=>prev.filter(r=>r.id!==id))
+    showToast({msg:'Reporte descartado',type:'warn'})
+  }
+
+  if(reports.length===0) return null
+
+  return (
+    <div style={{marginTop:16}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,flexWrap:'wrap',gap:6}}>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          <span style={{fontFamily:'Cinzel,serif',fontSize:10,color:'#f0a020',textTransform:'uppercase',letterSpacing:'0.1em'}}>
+            📡 Pendientes de Discord — {reports.length}
+          </span>
+          {lastSync&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555'}}>última sync: {lastSync}</span>}
+        </div>
+        <Btn onClick={load} size='sm' color='#888'>↻ Actualizar</Btn>
+      </div>
+
+      {reports.map(r=>(
+        <div key={r.id} style={{background:CARD,border:'1px solid #f0a02040',borderRadius:10,padding:'12px 14px',marginBottom:8}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:8,flexWrap:'wrap',gap:6}}>
+            <div>
+              <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:r.maze_type==='BD'?'#e05050':'#4ab8f0',fontSize:13}}>
+                {r.maze_type==='BD'?'🐉':'❄️'} {r.maze_type}
+              </span>
+              <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:12,marginLeft:8}}>
+                {r.session_date} · por {r.author_name}
+              </span>
+              <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:11,marginLeft:8}}>
+                #{r.channel_name}
+              </span>
+            </div>
+            <div style={{display:'flex',gap:6}}>
+              <Btn onClick={()=>approve(r)} disabled={busy===r.id} bg='green' size='sm'>
+                {busy===r.id?'Procesando...':'✓ Aprobar'}
+              </Btn>
+              <Btn onClick={()=>reject(r.id)} bg='danger' size='sm'>✕</Btn>
+            </div>
+          </div>
+
+          {/* Detected names */}
+          <div style={{display:'flex',flexWrap:'wrap',gap:5}}>
+            {(r.detected_names as string[]).map((name,i)=>(
+              <span key={i} style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,padding:'3px 8px',
+                borderRadius:12,background:DEEP,border:`1px solid ${BORDER}`,color:'#e8e0d0'}}>
+                {name.replace(/\*/g,'')}
+                {name.includes('*')&&<span style={{color:'#f0a020',marginLeft:3}}>★</span>}
+              </span>
+            ))}
+          </div>
+
+          {/* Image preview if available */}
+          {r.image_url&&(
+            <div style={{marginTop:8}}>
+              <img src={r.image_url} alt="Discord report" style={{maxHeight:80,maxWidth:'100%',borderRadius:6,opacity:0.8}}/>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ══════════════════════════════════════════════════════════════
 // ─── CLAIMS TAB ───────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════

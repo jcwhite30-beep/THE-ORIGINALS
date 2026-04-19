@@ -442,7 +442,16 @@ export default function DashboardPage() {
     setLoading(false)
   }
 
-  useEffect(() => { loadData() }, [])
+  useEffect(() => {
+    loadData()
+    // ── Realtime: auto-refresh when Discord posts update players ──
+    const channel = supabase.channel('dashboard-realtime')
+      .on('postgres_changes', {event:'*', schema:'public', table:'players'}, ()=>loadData())
+      .on('postgres_changes', {event:'INSERT', schema:'public', table:'maze_sessions'}, ()=>loadData())
+      .on('postgres_changes', {event:'INSERT', schema:'public', table:'claims'}, ()=>loadData())
+      .subscribe()
+    return () => { supabase.removeChannel(channel) }
+  }, [])
 
   async function handleClaimed() {
     const fresh = await getPublicLeaderboard()
@@ -504,13 +513,20 @@ export default function DashboardPage() {
         </div>
 
         {/* ── SEARCH ── */}
-        <div className="relative mb-3">
-          <input type="text" value={search} onChange={e => { setSearch(e.target.value); setSelected(null) }}
-            placeholder="Buscar jugador por nombre, owner o personaje..."
-            className="font-rajdhani w-full"
-            style={{background:CARD, border:`1px solid ${BORDER}`, borderRadius:10, padding:'12px 18px 12px 44px', color:'#e8e0d0', fontSize:15}}/>
-          <span style={{position:'absolute', left:14, top:'50%', transform:'translateY(-50%)', fontSize:15, color:'#555'}}>🔍</span>
-          {search && <button onClick={()=>{setSearch('');setSelected(null)}} style={{position:'absolute', right:14, top:'50%', transform:'translateY(-50%)', color:'#555', fontSize:15, background:'none', border:'none', cursor:'pointer'}}>✕</button>}
+        <div className="relative mb-3" style={{display:'flex',gap:8,alignItems:'center'}}>
+          <div style={{flex:1,position:'relative'}}>
+            <input type="text" value={search} onChange={e => { setSearch(e.target.value); setSelected(null) }}
+              placeholder="Buscar jugador por nombre, owner o personaje..."
+              className="font-rajdhani w-full"
+              style={{background:CARD, border:`1px solid ${BORDER}`, borderRadius:10, padding:'12px 18px 12px 44px', color:'#e8e0d0', fontSize:15}}/>
+            <span style={{position:'absolute', left:14, top:'50%', transform:'translateY(-50%)', fontSize:15, color:'#555'}}>🔍</span>
+            {search && <button onClick={()=>{setSearch('');setSelected(null)}} style={{position:'absolute', right:14, top:'50%', transform:'translateY(-50%)', color:'#555', fontSize:15, background:'none', border:'none', cursor:'pointer'}}>✕</button>}
+          </div>
+          <button onClick={()=>{setLoading(true);loadData()}}
+            title="Actualizar datos"
+            style={{padding:'11px 16px',borderRadius:10,background:CARD,border:`1px solid ${BORDER}`,color:'#888',cursor:'pointer',fontSize:16,flexShrink:0}}>
+            🔄
+          </button>
         </div>
         {search && <p className="font-rajdhani mb-3" style={{fontSize:12, color:GD}}>{filtered.length} resultado{filtered.length!==1?'s':''}</p>}
 
