@@ -178,11 +178,13 @@ export async function POST(req:NextRequest){
 
   // mark_processed — bot tells us a message was handled
   if(type==='mark_processed'&&body.messageId){
-    await supabase.from('discord_processed_messages').upsert({
-      message_id: body.messageId,
-      channel_name: channelName||'',
-      status: 'processed'
-    }).catch(()=>{})
+    try {
+      await supabase.from('discord_processed_messages').upsert({
+        message_id: body.messageId,
+        channel_name: channelName||'',
+        status: 'processed'
+      })
+    } catch(_){}
     return NextResponse.json({ok:true})
   }
 
