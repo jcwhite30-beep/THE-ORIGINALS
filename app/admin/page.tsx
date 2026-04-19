@@ -617,7 +617,7 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
     const lines=pasteText.split(/\n/).map(l=>l.trim()).filter(Boolean)
     const entries:ExtractedEntry[]=lines.map((line,i)=>{
       const isSupport=line.includes('*')
-      return {rawName:line.replace(/\*/g,'').trim(),isSupport,order:i}
+      return {rawName:line.replace(/\*/g,'').trim(),isSupport,isLooter:false,order:i}
     }).filter(e=>e.rawName.length>0)
     setRawExtracted(entries)
     await resolveChars(entries)
