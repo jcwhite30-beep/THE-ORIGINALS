@@ -7,7 +7,7 @@ export const runtime  = 'nodejs'
 export const maxDuration = 30
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.ANTHROPIC_API_KEY || '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'
+  const apiKey = process.env.ANTHROPIC_API_KEY
 
   let base64: string, mediaType: string
   try {
