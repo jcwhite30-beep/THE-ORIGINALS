@@ -114,17 +114,10 @@ export async function createMazeSession(s: Omit<MazeSession, 'id' | 'participant
   return data
 }
 export async function addPlayerPoints(playerId: string, sessionId: string, points: number) {
-  // Insert point record
-  const { error } = await supabase.from('player_points').upsert({ player_id: playerId, session_id: sessionId, points })
+  // Insert only — DB trigger handles updating total_score and available_pts
+  // See: trg_update_player_totals in fix_everything.sql
+  const { error } = await supabase.from('player_points').insert({ player_id: playerId, session_id: sessionId, points })
   if (error) throw error
-  // Update player totals directly (also handled by trigger if it exists)
-  const { data: cur } = await supabase.from('players').select('total_score,available_pts').eq('id', playerId).single()
-  if (cur) {
-    await supabase.from('players').update({
-      total_score:   Number(cur.total_score)   + points,
-      available_pts: Number(cur.available_pts) + points
-    }).eq('id', playerId)
-  }
 }
 
 // ── Loot tracking ─────────────────────────────────────────────

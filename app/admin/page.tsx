@@ -610,19 +610,15 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
           attended:true,points_earned:e.points,is_support:e.isSupport,is_looter:e.isLooter
         })
       }
+      // Admin slot — trigger handles point update automatically
       if(adminSlot&&dist.adminPts>0){
-        const{data:adm}=await supabase.from('players').select('id,total_score,available_pts').eq('name','Administrador').maybeSingle()
-        if(adm){
-          await supabase.from('player_points').insert({player_id:adm.id,session_id:session.id,points:dist.adminPts})
-          await supabase.from('players').update({total_score:Number(adm.total_score)+dist.adminPts,available_pts:Number(adm.available_pts)+dist.adminPts}).eq('id',adm.id)
-        }
+        const{data:adm}=await supabase.from('players').select('id').eq('name','Administrador').maybeSingle()
+        if(adm) await supabase.from('player_points').insert({player_id:adm.id,session_id:session.id,points:dist.adminPts})
       }
+      // Events slot — trigger handles point update automatically
       if(eventSlot&&dist.eventPts>0){
-        const{data:ev}=await supabase.from('players').select('id,total_score,available_pts').eq('name','Guild EVENTS').maybeSingle()
-        if(ev){
-          await supabase.from('player_points').insert({player_id:ev.id,session_id:session.id,points:dist.eventPts})
-          await supabase.from('players').update({total_score:Number(ev.total_score)+dist.eventPts,available_pts:Number(ev.available_pts)+dist.eventPts}).eq('id',ev.id)
-        }
+        const{data:ev}=await supabase.from('players').select('id').eq('name','Guild EVENTS').maybeSingle()
+        if(ev) await supabase.from('player_points').insert({player_id:ev.id,session_id:session.id,points:dist.eventPts})
       }
       await updateReportDate(mazeType,sDate)
       // Track loot: +1 loot fuera de banco, update looter stats
