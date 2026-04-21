@@ -420,12 +420,17 @@ export default function DashboardPage() {
 
   // Stats públicos — calculados dinámicamente desde la DB
   // Admin y Guild EVENTS están EXCLUIDOS de la vista pública
-  const publicLb = lb.filter(p => p.name !== 'Administrador' && p.name !== 'Guild EVENTS')
+  const publicLb     = lb.filter(p => p.name !== 'Administrador' && p.name !== 'Guild EVENTS')
+  const adminPlayer  = lb.find(p => p.name === 'Administrador')
   const publicTotalAvail = publicLb.reduce((s,p) => s + p.available_points, 0)
   const TOTAL_PTS_PUBLIC = Math.floor(publicTotalAvail / 5) * 5
   const CLAIMS_DISP_PUBLIC = Math.floor(TOTAL_PTS_PUBLIC / 5)
-  const LOOTS_BANCO = bankData?.loots_banco ?? 46
-  const LOOTS_FUERA = bankData?.loots_fuera ?? 77
+
+  // Loots en banco = valor real del banco MENOS los loots que le corresponden al admin
+  // (los puntos del admin son su pago interno, no son loots reales disponibles)
+  const adminLoots   = adminPlayer ? Math.floor(Number(adminPlayer.available_points) / 5) : 0
+  const LOOTS_BANCO  = Math.max(0, (bankData?.loots_banco ?? 46) - adminLoots)
+  const LOOTS_FUERA  = bankData?.loots_fuera ?? 77
   const LOOTS_CLAIMS = bankData?.loots_claims ?? 0
   const EVENTS_AVAIL = lb.find(p=>p.name==='Guild EVENTS')?.available_points ?? 148.41
 
