@@ -425,8 +425,11 @@ export default function DashboardPage() {
   const publicTotalAvail = publicLb.reduce((s,p) => s + p.available_points, 0)
   const TOTAL_PTS_PUBLIC = Math.floor(publicTotalAvail / 5) * 5
   const CLAIMS_DISP_PUBLIC = Math.floor(TOTAL_PTS_PUBLIC / 5)
-  // Loots vienen directamente de la DB — el valor en bank_snapshot ya es el correcto
-  const LOOTS_BANCO  = bankData?.loots_banco ?? 46
+  // Loots en banco público = loots_banco_DB - loots_admin
+  // Los loots del admin son su pago interno, no deben aparecer en el conteo público
+  // loots_admin = floor(puntos_admin / 5) porque cada 5 pts = 1 loot
+  const adminLootsInBank = adminPlayer ? Math.floor(Number(adminPlayer.available_points) / 5) : 0
+  const LOOTS_BANCO  = Math.max(0, (bankData?.loots_banco ?? 46) - adminLootsInBank)
   const LOOTS_FUERA  = bankData?.loots_fuera ?? 77
   const LOOTS_CLAIMS = bankData?.loots_claims ?? 0
   const EVENTS_AVAIL = lb.find(p=>p.name==='Guild EVENTS')?.available_points ?? 148.41
