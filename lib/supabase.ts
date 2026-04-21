@@ -133,26 +133,28 @@ export async function addPlayerPoints(playerId: string, sessionId: string, point
 // When a looter deposits: loots_fuera→loots_banco
 
 export async function onReportSaved(sessionId: string, looterPlayerId: string | null, mazeType: string) {
-  // Add 1 loot fuera de banco
-  await supabase.rpc('increment_loots_fuera', { qty: 1 }).catch(() => {
-    // fallback if rpc doesn't exist
-    supabase.from('bank_snapshot').select('id,loots_fuera').limit(1).single().then(({data}) => {
-      if (data) supabase.from('bank_snapshot').update({ loots_fuera: data.loots_fuera + 1 }).eq('id', data.id)
-    })
-  })
+  // Add 1 loot fuera de banco — direct update, no RPC needed
+  try {
+    const { data: bank } = await supabase.from('bank_snapshot').select('id,loots_fuera').limit(1).maybeSingle()
+    if (bank) {
+      await supabase.from('bank_snapshot').update({ loots_fuera: Number(bank.loots_fuera) + 1 }).eq('id', bank.id)
+    }
+  } catch (_) { /* non-critical */ }
   // Track loot event
-  await supabase.from('loot_events').insert({
-    event_type: 'reporte', maze_type: mazeType, session_id: sessionId, qty: 1
-  })
+  try {
+    await supabase.from('loot_events').insert({ event_type: 'reporte', maze_type: mazeType, session_id: sessionId, qty: 1 })
+  } catch (_) { /* non-critical */ }
   // If there's a looter, increment their total_loots and loots_pendientes
   if (looterPlayerId) {
-    const { data: p } = await supabase.from('players').select('total_loots,loots_pendientes').eq('id', looterPlayerId).single()
-    if (p) {
-      await supabase.from('players').update({
-        total_loots:      Number(p.total_loots)      + 1,
-        loots_pendientes: Number(p.loots_pendientes) + 1
-      }).eq('id', looterPlayerId)
-    }
+    try {
+      const { data: p } = await supabase.from('players').select('total_loots,loots_pendientes').eq('id', looterPlayerId).single()
+      if (p) {
+        await supabase.from('players').update({
+          total_loots:      Number(p.total_loots)      + 1,
+          loots_pendientes: Number(p.loots_pendientes) + 1
+        }).eq('id', looterPlayerId)
+      }
+    } catch (_) { /* non-critical */ }
   }
 }
 
