@@ -114,9 +114,83 @@ export async function createMazeSession(s: Omit<MazeSession, 'id' | 'participant
   return data
 }
 export async function addPlayerPoints(playerId: string, sessionId: string, points: number) {
+  // Insert point record
   const { error } = await supabase.from('player_points').upsert({ player_id: playerId, session_id: sessionId, points })
   if (error) throw error
-  // available_pts se actualiza via migration_v3 directamente en la DB
+  // Update player totals directly (also handled by trigger if it exists)
+  const { data: cur } = await supabase.from('players').select('total_score,available_pts').eq('id', playerId).single()
+  if (cur) {
+    await supabase.from('players').update({
+      total_score:   Number(cur.total_score)   + points,
+      available_pts: Number(cur.available_pts) + points
+    }).eq('id', playerId)
+  }
+}
+
+// ── Loot tracking ─────────────────────────────────────────────
+// When a maze session is saved: +1 loot fuera de banco
+// When a player makes a claim: -1 loot disponible
+// When a looter deposits: loots_fuera→loots_banco
+
+export async function onReportSaved(sessionId: string, looterPlayerId: string | null, mazeType: string) {
+  // Add 1 loot fuera de banco
+  await supabase.rpc('increment_loots_fuera', { qty: 1 }).catch(() => {
+    // fallback if rpc doesn't exist
+    supabase.from('bank_snapshot').select('id,loots_fuera').limit(1).single().then(({data}) => {
+      if (data) supabase.from('bank_snapshot').update({ loots_fuera: data.loots_fuera + 1 }).eq('id', data.id)
+    })
+  })
+  // Track loot event
+  await supabase.from('loot_events').insert({
+    event_type: 'reporte', maze_type: mazeType, session_id: sessionId, qty: 1
+  })
+  // If there's a looter, increment their total_loots and loots_pendientes
+  if (looterPlayerId) {
+    const { data: p } = await supabase.from('players').select('total_loots,loots_pendientes').eq('id', looterPlayerId).single()
+    if (p) {
+      await supabase.from('players').update({
+        total_loots:      Number(p.total_loots)      + 1,
+        loots_pendientes: Number(p.loots_pendientes) + 1
+      }).eq('id', looterPlayerId)
+    }
+  }
+}
+
+export async function onClaimMade(playerId: string, sessionId: string | null) {
+  // Claim = jugador cobra su loot ganado por participación
+  // NO toca loots_fuera — ese loot ya es del jugador, es su pago
+  // Solo reduce loots_claims (loots disponibles para distribuir en claims)
+  const { data: bank } = await supabase.from('bank_snapshot').select('id,loots_claims').limit(1).single()
+  if (bank && bank.loots_claims > 0) {
+    await supabase.from('bank_snapshot').update({
+      loots_claims: bank.loots_claims - 1
+    }).eq('id', bank.id)
+  }
+  await supabase.from('loot_events').insert({
+    event_type: 'claim', player_id: playerId, session_id: sessionId, qty: 1
+  })
+}
+
+export async function onLooterDepositsToBank(looterPlayerId: string, qty: number) {
+  // loots_fuera -= qty, loots_banco += qty
+  const { data: bank } = await supabase.from('bank_snapshot').select('*').limit(1).single()
+  if (bank) {
+    await supabase.from('bank_snapshot').update({
+      loots_fuera: Math.max(0, bank.loots_fuera - qty),
+      loots_banco: bank.loots_banco + qty,
+      updated_at:  new Date().toISOString()
+    }).eq('id', bank.id)
+  }
+  // Reduce looter's loots_pendientes
+  const { data: p } = await supabase.from('players').select('loots_pendientes').eq('id', looterPlayerId).single()
+  if (p) {
+    await supabase.from('players').update({
+      loots_pendientes: Math.max(0, Number(p.loots_pendientes) - qty)
+    }).eq('id', looterPlayerId)
+  }
+  await supabase.from('loot_events').insert({
+    event_type: 'entrega_banco', player_id: looterPlayerId, qty
+  })
 }
 export async function resolveAlert(alertId: string, action: string, playerName?: string) {
   await supabase.from('point_alerts').update({ resolved: true }).eq('id', alertId)

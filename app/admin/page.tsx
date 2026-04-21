@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useMemo } from 'react'
 import {
   supabase, getAdminLeaderboard, getAllPlayers, getPendingAlerts,
   getClaims, approveClaim, processClaim, resolveAlert, createMazeSession,
-  addPlayerPoints, createPlayer, updatePlayer, suggestPlayerName,
+  addPlayerPoints, onReportSaved, onClaimMade, onLooterDepositsToBank, createPlayer, updatePlayer, suggestPlayerName,
   getAnnouncements, createAnnouncement, deleteAnnouncement,
   getFVRunePoints, upsertFVRunePoints, updateReportDate,
   LeaderboardEntry, Player, PointAlert, Claim, MazeType, Announcement
@@ -625,9 +625,12 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
         }
       }
       await updateReportDate(mazeType,sDate)
+      // Track loot: +1 loot fuera de banco, update looter stats
+      const looterEntry=confirmed.find(e=>e.isLooter)
+      await onReportSaved(session.id, looterEntry?.playerId||null, mazeType)
       showToast({msg:`✓ Sesión ${mazeType} guardada — ${confirmed.length} jugadores · ${dist.perSlot} pts/slot`,type:'ok'})
       resetAll()
-    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'});setStep('preview')}
+    }catch(e:any){showToast({msg:'Error al guardar: '+e.message,type:'err'});setStep('preview')}
   }
 
   const unresolvedCount=pending.filter(p=>!p.isDuplicate&&!p.action).length
@@ -1175,6 +1178,8 @@ function ClaimsTab({showToast}:{showToast:(t:TT)=>void}){
     setBusy(true)
     try{
       await processClaim(selPlayer,`${mazeType}: ${note||'Claim registrado'}`)
+      // Update loot tracking: -1 loot fuera de banco
+      await onClaimMade(selPlayer, null)
       showToast({msg:'Claim registrado — 5 pts descontados',type:'ok'});setSelPlayer('');setNote('');load()
     }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
     finally{setBusy(false)}
@@ -1255,10 +1260,18 @@ function ConciliacionTab({showToast}:{showToast:(t:TT)=>void}){
   const [history,setHistory]=useState<any[]>([])
   const [form,setForm]=useState({loots_banco:0,loots_fuera:0,loots_events:0,loots_claims:0,keys_count:0,gold_coins:0,bnotes:0,bd_soul:0,bd_eye:0,bd_heart:0,white_cat:0,green_cat:0,yellow_cat:0,red_cat:0,notes:''})
   const [busy,setBusy]=useState(false)
+  // Depositar al banco
+  const [looters,setLooters]=useState<{id:string;name:string;loots_pendientes:number}[]>([])
+  const [depositPlayer,setDepositPlayer]=useState('')
+  const [depositQty,setDepositQty]=useState(1)
+  const [depositBusy,setDepositBusy]=useState(false)
 
   async function load(){
     const{data}=await supabase.from('bank_snapshot').select('*').order('created_at',{ascending:false}).limit(10)
     setSnap((data??[])[0]??null);setHistory(data??[])
+    // Load looters with pending loots
+    const{data:lp}=await supabase.from('players').select('id,name,loots_pendientes').gt('loots_pendientes',0).order('name')
+    setLooters(lp??[])
   }
   useEffect(()=>{load()},[])
 
@@ -1269,6 +1282,17 @@ function ConciliacionTab({showToast}:{showToast:(t:TT)=>void}){
       showToast({msg:'Snapshot guardado',type:'ok'});load()
     }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
     finally{setBusy(false)}
+  }
+
+  async function handleDeposit(){
+    if(!depositPlayer){showToast({msg:'Selecciona el looter',type:'warn'});return}
+    setDepositBusy(true)
+    try{
+      await onLooterDepositsToBank(depositPlayer, depositQty)
+      showToast({msg:`✓ ${depositQty} loot(s) depositado(s) al banco`,type:'ok'})
+      setDepositPlayer('');setDepositQty(1);load()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    finally{setDepositBusy(false)}
   }
 
   const n=(k:string)=>form[k as keyof typeof form] as number
@@ -1290,7 +1314,32 @@ function ConciliacionTab({showToast}:{showToast:(t:TT)=>void}){
         </div>
       )}
 
-      <Card title="Registrar Conciliación" color={`${G}40`}>
+      {/* Depositar al banco */}
+      <Card title="📥 Looter deposita al banco" color='#4ab8f040'>
+        <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666',marginBottom:10}}>
+          Cuando un looter entrega su loot al banco: <strong style={{color:'#f0a020'}}>−1 fuera de banco</strong> → <strong style={{color:'#4ab8f0'}}>+1 en banco</strong>
+        </p>
+        <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:8,alignItems:'end'}}>
+          <div>
+            <div style={{fontSize:9,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:3}}>Looter</div>
+            <select value={depositPlayer} onChange={e=>setDepositPlayer(e.target.value)}
+              style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'Rajdhani,sans-serif'}}>
+              <option value="">— Seleccionar looter —</option>
+              {looters.map(p=><option key={p.id} value={p.id}>{p.name} ({p.loots_pendientes} pendientes)</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:3}}>Cantidad</div>
+            <input type="number" min="1" value={depositQty} onChange={e=>setDepositQty(parseInt(e.target.value)||1)}
+              style={{width:70,background:DEEP,border:`1px solid ${BORDER}`,borderRadius:5,padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'Rajdhani,sans-serif'}}/>
+          </div>
+          <Btn onClick={handleDeposit} disabled={depositBusy} bg='gold'>
+            {depositBusy?'...':'📥 Depositar'}
+          </Btn>
+        </div>
+      </Card>
+
+      <Card title="Registrar Conciliación Manual" color={`${G}40`}>
         <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10}}>
           {[['Loots en Banco','loots_banco'],['Loots Fuera Banco','loots_fuera'],['Loots para Claims','loots_claims'],['BD Soul','bd_soul'],['BD Eye','bd_eye'],['BD Heart','bd_heart'],['Cat. Blanca','white_cat'],['Cat. Verde','green_cat'],['Cat. Amarilla','yellow_cat'],['Keys','keys_count'],['Gold Coins','gold_coins'],['BNotes','bnotes']].map(([l,k])=>(
             <div key={k}>

@@ -424,13 +424,19 @@ export default function DashboardPage() {
   // Redondear al múltiplo de 5 más bajo para claims exactos
   const TOTAL_PTS_PUBLIC = Math.floor(publicTotalAvail / 5) * 5
   const CLAIMS_DISP_PUBLIC = Math.floor(TOTAL_PTS_PUBLIC / 5)
-  const LOOTS_BANCO = 46
-  const LOOTS_FUERA = 77
+  const LOOTS_BANCO = bankData?.loots_banco ?? 46
+  const LOOTS_FUERA = bankData?.loots_fuera ?? 77
+  const LOOTS_CLAIMS = bankData?.loots_claims ?? 0
   const EVENTS_AVAIL = lb.find(p=>p.name==='Guild EVENTS')?.available_points ?? 148.41
+
+  const [bankData, setBankData] = useState<any>(null)
 
   async function loadData() {
     const l = await getPublicLeaderboard()
     setLb(l)
+    // Load bank snapshot for loot counts
+    const { data: bank } = await supabase.from('bank_snapshot').select('loots_banco,loots_fuera,loots_claims').order('created_at', {ascending:false}).limit(1).maybeSingle()
+    if (bank) setBankData(bank)
     // FV totals per rune
     const {data: fvRows} = await supabase.from('fv_rune_points').select('*')
     const totals: Record<string,{avail:number;claims:number}> = {}
