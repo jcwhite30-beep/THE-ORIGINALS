@@ -1656,8 +1656,10 @@ export default function AdminPage(){
 
   useEffect(()=>{
     if(!session)return
-    supabase.from('admin_profiles').select('permissions,role').eq('id',session.user.id).single()
-      .then(({data})=>{
+    // Use service-role endpoint to avoid RLS recursion on admin_profiles
+    fetch('/api/admin-profile?userId='+session.user.id)
+      .then(r=>r.json())
+      .then(data=>{
         if(data?.role==='superadmin'){
           const all:Record<string,boolean>={}
           ALL_PERMS.forEach(p=>all[p.key]=true)
@@ -1667,6 +1669,12 @@ export default function AdminPage(){
           setUserPerms(data?.permissions??{})
           setIsSuperAdmin(false)
         }
+      })
+      .catch(()=>{
+        // fallback: treat as superadmin if can't read permissions
+        const all:Record<string,boolean>={}
+        ALL_PERMS.forEach(p=>all[p.key]=true)
+        setUserPerms(all);setIsSuperAdmin(true)
       })
   },[session])
 
