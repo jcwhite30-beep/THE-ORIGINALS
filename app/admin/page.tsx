@@ -10,6 +10,7 @@ import {
   LeaderboardEntry, Player, PointAlert, Claim, MazeType, Announcement
 } from '@/lib/supabase'
 import { extractMazeFromImage, calcPointDistribution, normalizeName, similarity, ExtractedEntry } from '@/lib/maze-vision'
+import { parseMazeText } from '@/lib/maze-parser'
 
 // ─── Design tokens ────────────────────────────────────────────
 const G='#c9a84c', GD='#7a6030', CARD='#0d0d1e', DEEP='#070712', VOID='#04040e', BORDER='#22224a'
@@ -477,7 +478,7 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
       setVisionRawText(result.rawText)
       if(!result.success){
         const msg=result.error||'Error al leer la imagen'
-        showToast({msg,type:'err'})
+        showToast({msg:`${msg} — usa texto manual`,type:'warn'})
         setStep('upload')
         return
       }
@@ -501,12 +502,29 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
   // ── Step 2: User reviews/edits, then resolves chars ─────────
   async function handleProcess(){
     setStep('resolving')
-    const entries=rawEntries.length>0 ? rawEntries
+    const entries = rawEntries.length > 0 ? rawEntries
       : pasteText.split(/\n/).map((l,i)=>({
           rawName:l.replace(/\*/g,'').trim(),
           isSupport:l.includes('*'),isLooter:false,order:i
-        })).filter(e=>e.rawName.length>0)
+        })).filter((e:{rawName:string})=>e.rawName.length>0)
     await resolveChars(entries)
+  }
+
+  // ── Text paste — uses pure parser, NO IA tokens ───────────
+  async function handlePaste(){
+    if(!pasteText.trim()) return
+    const parsed = parseMazeText(pasteText)
+    if(parsed.mazeType !== 'unknown') setMazeType(parsed.mazeType as MazeType)
+    if(parsed.sessionDate) setSessionDate(parsed.sessionDate)
+    if(parsed.sessionTime) setSessionTime(parsed.sessionTime)
+    if(parsed.looter)      setLooter(parsed.looter)
+    if(parsed.entries.length === 0){
+      showToast({msg:'No se detectaron participantes. Escribe un nombre por línea.',type:'warn'})
+      return
+    }
+    setRawEntries(parsed.entries)
+    setShowPaste(false)
+    setStep('edit')
   }
 
   async function resolveChars(entries:ExtractedEntry[]){
@@ -653,10 +671,11 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
           {showPaste&&(
             <div>
               <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#666',marginBottom:6}}>
-                Un nombre por línea · <code style={{color:G}}>*</code> = apoyo mágico
+                Pega el reporte completo — el sistema detecta la fecha, hora, looter y participantes automáticamente.
+                Agrega <code style={{color:G}}>*</code> al final del nombre para apoyo mágico.
               </p>
-              <textarea rows={8} value={pasteText} onChange={e=>setPasteText(e.target.value)}
-                placeholder={"Gokuld\nStylegood\nWestern*\nNeones*\nLegilas\nAlexghotico\nLinka*"}
+              <textarea rows={10} value={pasteText} onChange={e=>setPasteText(e.target.value)}
+                placeholder={"Bd lair 21.00.00svt 20/04/2026\nNieve\nAlexgotico\nJoaquín\nObiWankenobi\nRoronowa\nLinka\nWin nadie\nLinka on loot\nATT 6"}
                 style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,
                   padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'monospace',resize:'vertical',boxSizing:'border-box'}}/>
               <div style={{marginTop:8,display:'flex',gap:8,flexWrap:'wrap'}}>
@@ -672,7 +691,7 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
                     </button>
                   ))}
                 </div>
-                <Btn onClick={()=>{const entries=pasteText.split(/\n/).map((l,i)=>({rawName:l.replace(/\*/g,'').trim(),isSupport:l.includes('*'),isLooter:false,order:i})).filter(e=>e.rawName.length>0);setRawEntries(entries);setStep('edit')}} bg='gold' disabled={!pasteText.trim()}>▶ Continuar</Btn>
+                <Btn onClick={handlePaste} bg='gold' disabled={!pasteText.trim()}>▶ Procesar</Btn>
               </div>
             </div>
           )}
