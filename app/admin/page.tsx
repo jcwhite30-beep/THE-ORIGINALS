@@ -439,8 +439,8 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
   const [sessionDate,setSessionDate]=useState('')
   const [sessionTime,setSessionTime]=useState('')
   const [looter,setLooter]=useState('')
-  const [adminSlot,setAdminSlot]=useState(false)
-  const [eventSlot,setEventSlot]=useState(false)
+  const [adminSlot,setAdminSlot]=useState(true)   // always on by default
+  const [eventSlot,setEventSlot]=useState(true)   // always on by default
 
   // Flow steps
   const [step,setStep]=useState<'upload'|'reading'|'edit'|'resolving'|'preview'|'saving'>('upload')
@@ -465,7 +465,7 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
     setStep('upload');setImageFile(null);setImagePreview(null)
     setPending([]);setConfirmed([]);setRawEntries([]);setVisionRawText('')
     setSessionDate('');setSessionTime('');setLooter('')
-    setAdminSlot(false);setEventSlot(false)
+    setAdminSlot(true);setEventSlot(true)   // always default to true
     if(fileRef.current)fileRef.current.value=''
   }
 
@@ -773,24 +773,56 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
             </label>
           </div>
 
-          {/* Participants list — editable */}
-          <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'10px 14px',marginBottom:14}}>
-            <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:8}}>
-              {rawEntries.length} participantes detectados
-            </div>
-            <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-              {rawEntries.map((e,i)=>(
-                <div key={i} style={{display:'flex',alignItems:'center',gap:4,padding:'4px 10px',
-                  borderRadius:20,background:CARD,border:`1px solid ${e.isSupport?'#f0a020':BORDER}`}}>
-                  <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#e8e0d0'}}>{e.rawName}</span>
-                  {e.isSupport&&<span style={{color:'#f0a020',fontSize:11}}>★</span>}
-                  {normalizeName(e.rawName)===normalizeName(looter)&&looter&&<span style={{color:G,fontSize:11}}>🏆</span>}
-                  <button onClick={()=>setRawEntries(prev=>prev.filter((_,j)=>j!==i))}
-                    style={{color:'#e04040',background:'none',border:'none',cursor:'pointer',fontSize:12,lineHeight:1,padding:'0 2px'}}>✕</button>
+          {/* Points preview — shown while editing */}
+          {rawEntries.length > 0 && (()=>{
+            const editDist = calcPointDistribution(5, rawEntries.length, adminSlot?1:0, eventSlot?1:0)
+            return (
+              <div style={{background:DEEP,border:`1px solid ${G}40`,borderRadius:10,padding:'12px 16px',marginBottom:14}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10,flexWrap:'wrap',gap:6}}>
+                  <span style={{fontFamily:'Cinzel,serif',fontSize:10,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em'}}>
+                    Distribución de puntos
+                  </span>
+                  <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                    <span style={{fontFamily:'Cinzel,serif',fontSize:11,color:'#888'}}>5 pts ÷</span>
+                    <span style={{fontFamily:'Cinzel,serif',fontSize:13,fontWeight:700,color:G}}>{editDist.totalSlots} slots</span>
+                    <span style={{fontFamily:'Cinzel,serif',fontSize:11,color:'#888'}}>=</span>
+                    <span style={{fontFamily:'Cinzel,serif',fontSize:18,fontWeight:700,color:G}}>{editDist.perSlot}</span>
+                    <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#666'}}>pts c/u</span>
+                  </div>
                 </div>
-              ))}
-            </div>
-          </div>
+                {/* Participants rows */}
+                {rawEntries.map((e,i)=>(
+                  <div key={i} style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+                    padding:'5px 0',borderBottom:i<rawEntries.length-1?`1px solid #0f0f18`:'none'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#e8e0d0'}}>{e.rawName}</span>
+                      {e.isSupport&&<span style={{color:'#f0a020',fontSize:11}}>★</span>}
+                      {normalizeName(e.rawName)===normalizeName(looter)&&looter&&<span style={{color:G,fontSize:11}}>🏆</span>}
+                    </div>
+                    <div style={{display:'flex',alignItems:'center',gap:8}}>
+                      <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:G,fontSize:13}}>{editDist.playerPts} pts</span>
+                      <button onClick={()=>setRawEntries(prev=>prev.filter((_,j)=>j!==i))}
+                        style={{color:'#e04040',background:'none',border:'none',cursor:'pointer',fontSize:13,lineHeight:1}}>✕</button>
+                    </div>
+                  </div>
+                ))}
+                {/* Admin and Events rows */}
+                {adminSlot&&(
+                  <div style={{display:'flex',justifyContent:'space-between',padding:'5px 0',
+                    borderTop:`1px dashed #1a1a3a`,marginTop:4}}>
+                    <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#555'}}>Administrador <span style={{fontSize:10}}>(privado)</span></span>
+                    <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:'#888',fontSize:12}}>{editDist.adminPts} pts</span>
+                  </div>
+                )}
+                {eventSlot&&(
+                  <div style={{display:'flex',justifyContent:'space-between',padding:'5px 0'}}>
+                    <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#40d0a0'}}>Guild Events</span>
+                    <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:'#40d0a0',fontSize:12}}>{editDist.eventPts} pts</span>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
 
           <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
             <Btn onClick={handleProcess} bg='gold'>▶ Procesar y resolver jugadores</Btn>
