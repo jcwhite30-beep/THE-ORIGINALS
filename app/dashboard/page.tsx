@@ -416,20 +416,18 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<LeaderboardEntry|null>(null)
+  const [bankData, setBankData] = useState<any>(null)
 
   // Stats públicos — calculados dinámicamente desde la DB
   // Admin y Guild EVENTS están EXCLUIDOS de la vista pública
   const publicLb = lb.filter(p => p.name !== 'Administrador' && p.name !== 'Guild EVENTS')
   const publicTotalAvail = publicLb.reduce((s,p) => s + p.available_points, 0)
-  // Redondear al múltiplo de 5 más bajo para claims exactos
   const TOTAL_PTS_PUBLIC = Math.floor(publicTotalAvail / 5) * 5
   const CLAIMS_DISP_PUBLIC = Math.floor(TOTAL_PTS_PUBLIC / 5)
   const LOOTS_BANCO = bankData?.loots_banco ?? 46
   const LOOTS_FUERA = bankData?.loots_fuera ?? 77
   const LOOTS_CLAIMS = bankData?.loots_claims ?? 0
   const EVENTS_AVAIL = lb.find(p=>p.name==='Guild EVENTS')?.available_points ?? 148.41
-
-  const [bankData, setBankData] = useState<any>(null)
 
   async function loadData() {
     const l = await getPublicLeaderboard()
