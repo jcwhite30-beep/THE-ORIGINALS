@@ -112,29 +112,11 @@ function RankingTab({showToast,isSuperAdmin}:{showToast:(t:TT)=>void;isSuperAdmi
 
   async function load(){
     setLoading(true)
-    // Load leaderboard + admin/events players directly (admin_leaderboard view may exclude them)
-    const [lbData, adminData] = await Promise.all([
-      getAdminLeaderboard(),
-      supabase.from('players').select('id,name,total_score,available_pts,chars,owner,class')
-        .in('name',['Administrador','Guild EVENTS']).eq('is_active',true)
-    ])
-    // Merge: convert admin players to LeaderboardEntry format
-    const adminEntries: LeaderboardEntry[] = (adminData.data??[]).map((p:any) => ({
-      id: p.id,
-      name: p.name,
-      owner: p.owner ?? p.name,
-      chars: p.chars ?? '',
-      class: p.class ?? '',
-      total_points: Number(p.total_score ?? 0),
-      available_points: Number(p.available_pts ?? 0),
-      total_claims: 0,
-      bd_points: 0,
-      fv_points: 0,
-    }))
-    // Combine — put admin entries that aren't already in lbData
-    const existingNames = new Set(lbData.map((x:LeaderboardEntry)=>x.name))
-    const merged = [...lbData, ...adminEntries.filter(e=>!existingNames.has(e.name))]
-    setLb(merged)
+    // Use server-side endpoint with service role key — reads ALL players including Administrador
+    // This bypasses RLS and the admin_leaderboard view which may exclude admin players
+    const res = await fetch('/api/admin-ranking')
+    const data: LeaderboardEntry[] = await res.json()
+    setLb(Array.isArray(data) ? data : [])
     setLoading(false)
     supabase.from('fv_rune_points').select('*, players(name)').then(({data:d})=>{
       const map:Record<string,any>={}
