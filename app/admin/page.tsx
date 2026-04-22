@@ -610,15 +610,27 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
           attended:true,points_earned:e.points,is_support:e.isSupport,is_looter:e.isLooter
         })
       }
-      // Admin slot — trigger handles point update automatically
+      // Admin slot — uses addPlayerPoints which does manual update (no trigger dependency)
       if(adminSlot&&dist.adminPts>0){
-        const{data:adm}=await supabase.from('players').select('id').eq('name','Administrador').maybeSingle()
-        if(adm) await supabase.from('player_points').insert({player_id:adm.id,session_id:session.id,points:dist.adminPts})
+        const{data:adm}=await supabase.from('players').select('id,total_score,available_pts').eq('name','Administrador').maybeSingle()
+        if(adm){
+          await supabase.from('player_points').insert({player_id:adm.id,session_id:session.id,points:dist.adminPts})
+          await supabase.from('players').update({
+            total_score:Number(adm.total_score)+dist.adminPts,
+            available_pts:Number(adm.available_pts)+dist.adminPts
+          }).eq('id',adm.id)
+        }
       }
-      // Events slot — trigger handles point update automatically
+      // Events slot
       if(eventSlot&&dist.eventPts>0){
-        const{data:ev}=await supabase.from('players').select('id').eq('name','Guild EVENTS').maybeSingle()
-        if(ev) await supabase.from('player_points').insert({player_id:ev.id,session_id:session.id,points:dist.eventPts})
+        const{data:ev}=await supabase.from('players').select('id,total_score,available_pts').eq('name','Guild EVENTS').maybeSingle()
+        if(ev){
+          await supabase.from('player_points').insert({player_id:ev.id,session_id:session.id,points:dist.eventPts})
+          await supabase.from('players').update({
+            total_score:Number(ev.total_score)+dist.eventPts,
+            available_pts:Number(ev.available_pts)+dist.eventPts
+          }).eq('id',ev.id)
+        }
       }
       await updateReportDate(mazeType,sDate)
       // Track loot: +1 loot fuera de banco, update looter stats
@@ -964,10 +976,128 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
       {/* DISCORD PENDING */}
       <DiscordPendingPanel showToast={showToast} allPlayers={allPlayers} onApproved={()=>{}}/>
 
+      {/* HISTORIAL DE SESIONES */}
+      <SessionHistoryPanel showToast={showToast}/>
+
     </div>
   )
 }
 
+
+// ── Session History Panel ─────────────────────────────────────
+function SessionHistoryPanel({showToast}:{showToast:(t:TT)=>void}){
+  const [sessions,setSessions]=useState<any[]>([])
+  const [expanded,setExpanded]=useState<string|null>(null)
+  const [attendees,setAttendees]=useState<Record<string,any[]>>({})
+  const [loading,setLoading]=useState(true)
+  const [deleting,setDeleting]=useState<string|null>(null)
+
+  async function load(){
+    setLoading(true)
+    const{data}=await supabase.from('maze_sessions').select('*')
+      .order('session_date',{ascending:false}).order('created_at',{ascending:false}).limit(30)
+    setSessions(data??[])
+    setLoading(false)
+  }
+  useEffect(()=>{load()},[])
+
+  async function loadAttendees(sessionId:string){
+    if(attendees[sessionId]) return
+    const{data}=await supabase.from('maze_attendance')
+      .select('*, players(name)')
+      .eq('session_id',sessionId)
+    setAttendees(p=>({...p,[sessionId]:data??[]}))
+  }
+
+  async function handleDelete(sessionId:string, sessionInfo:string){
+    if(!confirm(`¿Eliminar sesión "${sessionInfo}"?\nEsto NO revierte los puntos ya acreditados.`)) return
+    setDeleting(sessionId)
+    try{
+      await supabase.from('maze_attendance').delete().eq('session_id',sessionId)
+      await supabase.from('player_points').delete().eq('session_id',sessionId)
+      await supabase.from('maze_sessions').delete().eq('id',sessionId)
+      showToast({msg:'Sesión eliminada (puntos NO revertidos)',type:'ok'})
+      load()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    finally{setDeleting(null)}
+  }
+
+  const toggle=(id:string)=>{
+    if(expanded===id){setExpanded(null);return}
+    setExpanded(id);loadAttendees(id)
+  }
+
+  return(
+    <Card title="📋 Historial de Sesiones" color='#1a1a3a'>
+      {loading
+        ?<div style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:13,padding:'10px 0'}}>Cargando...</div>
+        :sessions.length===0
+          ?<div style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:13,padding:'10px 0'}}>No hay sesiones guardadas aún.</div>
+          :sessions.map(s=>{
+            const isExp=expanded===s.id
+            const col=s.maze_type==='BD'?'#e05050':'#4ab8f0'
+            return(
+              <div key={s.id} style={{marginBottom:6,border:`1px solid ${isExp?col:BORDER}`,borderRadius:8,overflow:'hidden'}}>
+                {/* Header row */}
+                <div onClick={()=>toggle(s.id)} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 12px',
+                  cursor:'pointer',background:isExp?`${col}10`:DEEP,flexWrap:'wrap'}}>
+                  <span style={{fontFamily:'Cinzel,serif',fontSize:10,fontWeight:700,color:col,
+                    textTransform:'uppercase',minWidth:24}}>{s.maze_type}</span>
+                  <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#e8e0d0',flex:1}}>
+                    {s.session_date}{s.session_time?` · ${s.session_time}`:''}
+                    {s.looter?<span style={{color:'#c9a84c',marginLeft:8}}>🏆 {s.looter}</span>:''}
+                  </span>
+                  <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555'}}>
+                    {new Date(s.created_at).toLocaleDateString('es')}
+                  </span>
+                  <span style={{color:'#555',fontSize:12}}>{isExp?'▲':'▼'}</span>
+                </div>
+                {/* Expanded detail */}
+                {isExp&&(
+                  <div style={{padding:'10px 14px',background:CARD}}>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:8,flexWrap:'wrap',gap:6}}>
+                      <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555'}}>
+                        {s.raw_report&&<span>Reporte: {s.raw_report.slice(0,60)}{s.raw_report.length>60?'...':''}</span>}
+                      </div>
+                      <button onClick={()=>handleDelete(s.id,`${s.maze_type} ${s.session_date}`)}
+                        disabled={deleting===s.id}
+                        style={{fontSize:11,padding:'3px 10px',borderRadius:5,
+                          border:'1px solid #e04040',background:'transparent',color:'#e04040',
+                          cursor:'pointer',fontFamily:'Rajdhani,sans-serif'}}>
+                        {deleting===s.id?'...':'🗑 Eliminar'}
+                      </button>
+                    </div>
+                    {/* Attendees */}
+                    {attendees[s.id]
+                      ?<div>
+                        <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#555',
+                          textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:6}}>
+                          {attendees[s.id].length} participantes
+                        </div>
+                        <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                          {attendees[s.id].map((a:any,i:number)=>(
+                            <div key={i} style={{padding:'3px 10px',borderRadius:12,
+                              background:DEEP,border:`1px solid ${a.is_looter?'#c9a84c':a.is_support?'#f0a020':BORDER}`,
+                              fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#e8e0d0',display:'flex',gap:4,alignItems:'center'}}>
+                              <span>{a.players?.name??'?'}</span>
+                              {a.is_support&&<span style={{color:'#f0a020',fontSize:10}}>★</span>}
+                              {a.is_looter&&<span style={{color:'#c9a84c',fontSize:10}}>🏆</span>}
+                              <span style={{color:G,fontSize:10}}>{Number(a.points_earned).toFixed(4)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      :<div style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:'#555'}}>Cargando participantes...</div>
+                    }
+                  </div>
+                )}
+              </div>
+            )
+          })
+      }
+    </Card>
+  )
+}
 
 // ── Inline search helper for resolving chars ──────────────────
 function SearchPlayerForChar({rawName,allPlayers,onSelect,onCreateNew}:{
