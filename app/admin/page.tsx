@@ -128,6 +128,8 @@ function RankingTab({showToast,isSuperAdmin}:{showToast:(t:TT)=>void;isSuperAdmi
       total_points: Number(p.total_score ?? 0),
       available_points: Number(p.available_pts ?? 0),
       total_claims: 0,
+      bd_points: 0,
+      fv_points: 0,
     }))
     // Combine — put admin entries that aren't already in lbData
     const existingNames = new Set(lbData.map((x:LeaderboardEntry)=>x.name))
