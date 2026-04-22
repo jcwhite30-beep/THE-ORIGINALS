@@ -438,6 +438,7 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
   const [imageFile,setImageFile]=useState<File|null>(null)
   const [imagePreview,setImagePreview]=useState<string|null>(null)
   const fileRef=useRef<HTMLInputElement>(null)
+  const [sessionReloadKey,setSessionReloadKey]=useState(0)
 
   // Extracted & editable fields
   const [mazeType,setMazeType]=useState<MazeType>('BD')
@@ -467,11 +468,15 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
   function getDist(n:number){ return calcPointDistribution(5,n,adminSlot?1:0,eventSlot?1:0) }
 
   function resetAll(){
-    setStep('upload');setImageFile(null);setImagePreview(null)
+    setStep('upload')
+    setImageFile(null);setImagePreview(null)
     setPending([]);setConfirmed([]);setRawEntries([]);setVisionRawText('')
     setSessionDate('');setSessionTime('');setLooter('')
-    setAdminSlot(true);setEventSlot(true)   // always default to true
+    setPasteText('');setShowPaste(false)
+    setAdminSlot(true);setEventSlot(true)
     if(fileRef.current)fileRef.current.value=''
+    // Scroll to top of mazes section
+    window.scrollTo({top:0,behavior:'smooth'})
   }
 
   // ── Step 1: IA reads image ──────────────────────────────────
@@ -642,6 +647,7 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
       const looterEntry=confirmed.find(e=>e.isLooter)
       await onReportSaved(session.id, looterEntry?.playerId||null, mazeType)
       showToast({msg:`✓ Sesión ${mazeType} guardada — ${confirmed.length} jugadores · ${dist.perSlot} pts/slot`,type:'ok'})
+      setSessionReloadKey(k => k+1)  // force SessionHistoryPanel to reload
       resetAll()
     }catch(e:any){showToast({msg:'Error al guardar: '+e.message,type:'err'});setStep('preview')}
   }
@@ -982,7 +988,7 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
       <DiscordPendingPanel showToast={showToast} allPlayers={allPlayers} onApproved={()=>{}}/>
 
       {/* HISTORIAL DE SESIONES */}
-      <SessionHistoryPanel showToast={showToast}/>
+      <SessionHistoryPanel showToast={showToast} reloadKey={sessionReloadKey}/>
 
     </div>
   )
@@ -990,7 +996,7 @@ function MazesTab({showToast}:{showToast:(t:TT)=>void}){
 
 
 // ── Session History Panel ─────────────────────────────────────
-function SessionHistoryPanel({showToast}:{showToast:(t:TT)=>void}){
+function SessionHistoryPanel({showToast,reloadKey=0}:{showToast:(t:TT)=>void;reloadKey?:number}){
   const [sessions,setSessions]=useState<any[]>([])
   const [expanded,setExpanded]=useState<string|null>(null)
   const [attendees,setAttendees]=useState<Record<string,any[]>>({})
@@ -1004,7 +1010,7 @@ function SessionHistoryPanel({showToast}:{showToast:(t:TT)=>void}){
     setSessions(data??[])
     setLoading(false)
   }
-  useEffect(()=>{load()},[])
+  useEffect(()=>{load()},[reloadKey])
 
   async function loadAttendees(sessionId:string){
     if(attendees[sessionId]) return
@@ -1021,7 +1027,11 @@ function SessionHistoryPanel({showToast}:{showToast:(t:TT)=>void}){
       await supabase.from('maze_attendance').delete().eq('session_id',sessionId)
       await supabase.from('player_points').delete().eq('session_id',sessionId)
       await supabase.from('maze_sessions').delete().eq('id',sessionId)
-      showToast({msg:'Sesión eliminada (puntos NO revertidos)',type:'ok'})
+      // Clear cache and force reload
+      setAttendees({})
+      setExpanded(null)
+      setSessions(prev => prev.filter(s => s.id !== sessionId))
+      showToast({msg:'Sesión eliminada',type:'ok'})
       load()
     }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
     finally{setDeleting(null)}
