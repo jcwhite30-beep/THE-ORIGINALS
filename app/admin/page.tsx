@@ -208,7 +208,7 @@ function RankingTab({showToast,isSuperAdmin}:{showToast:(t:TT)=>void;isSuperAdmi
                   {tdN(f2(adminAvail),'#e05050',14)}
                   {tdN(f2(adminAvail),G,14)}
                   {tdN(fi(adminAvail/5),G,15)}
-                  {tdN(adminPlayer?.total_claims??0,'#40d0a0',13)}
+                  {tdN(0,'#40d0a0',13)}
                   {isSuperAdmin&&<td style={{padding:'9px 10px',textAlign:'center'}}><span style={{color:'#444',fontSize:11}}>—</span></td>}
                 </tr>
                 )}
@@ -1158,6 +1158,7 @@ function ClaimsTab({showToast}:{showToast:(t:TT)=>void}){
   const [selPlayer,setSelPlayer]=useState('')
   const [mazeType,setMazeType]=useState<'BD'|'FV'>('BD')
   const [note,setNote]=useState('')
+  const [qty,setQty]=useState(1)  // how many claims (default: max available)
   const [busy,setBusy]=useState(false)
 
   async function load(){
@@ -1170,18 +1171,26 @@ function ClaimsTab({showToast}:{showToast:(t:TT)=>void}){
   async function handleCreate(){
     if(!selPlayer){showToast({msg:'Selecciona un jugador',type:'warn'});return}
     const selP=players.find(p=>p.id===selPlayer)
-    if(selP&&selP.available_points<5){showToast({msg:'Puntos insuficientes',type:'warn'});return}
+    if(!selP||selP.available_points<5){showToast({msg:'Puntos insuficientes',type:'warn'});return}
+    const maxClaims=Math.floor(selP.available_points/5)
+    const actualQty=Math.min(qty,maxClaims)
+    if(actualQty<=0){showToast({msg:'Sin claims disponibles',type:'warn'});return}
     setBusy(true)
     try{
-      await processClaim(selPlayer,`${mazeType}: ${note||'Claim registrado'}`)
-      // Update loot tracking: -1 loot fuera de banco
+      // Register N claims
+      for(let i=0;i<actualQty;i++){
+        await processClaim(selPlayer,`${mazeType}: ${note||'Claim registrado'} (${i+1}/${actualQty})`)
+      }
       await onClaimMade(selPlayer, null)
-      showToast({msg:'Claim registrado — 5 pts descontados',type:'ok'});setSelPlayer('');setNote('');load()
+      showToast({msg:`✓ ${actualQty} claim(s) registrado(s) — ${actualQty*5} pts descontados`,type:'ok'})
+      setSelPlayer('');setNote('');setQty(1);load()
     }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
     finally{setBusy(false)}
   }
 
   const selP=players.find(p=>p.id===selPlayer)
+  // Auto-set qty to max available when player changes
+  const maxQtyForPlayer=selP?Math.floor(selP.available_points/5):1
   const pending=claims.filter(c=>!c.approved)
   const approved=claims.filter(c=>c.approved)
 
@@ -1191,7 +1200,7 @@ function ClaimsTab({showToast}:{showToast:(t:TT)=>void}){
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
           <div>
             <div style={{fontSize:9,color:'#888',fontFamily:'Cinzel,serif',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:3}}>Jugador</div>
-            <select value={selPlayer} onChange={e=>setSelPlayer(e.target.value)} style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'Rajdhani,sans-serif'}}>
+            <select value={selPlayer} onChange={e=>{setSelPlayer(e.target.value);const p=players.find(x=>x.id===e.target.value);if(p)setQty(Math.max(1,Math.floor(p.available_points/5)))}} style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'Rajdhani,sans-serif'}}>
               <option value="">— Seleccionar —</option>
               {players.map(p=><option key={p.id} value={p.id}>{p.name} ({f2(p.available_points)} pts)</option>)}
             </select>
@@ -1209,14 +1218,38 @@ function ClaimsTab({showToast}:{showToast:(t:TT)=>void}){
         </div>
         {selP&&(
           <div style={{background:DEEP,border:`1px solid ${BORDER}`,borderRadius:8,padding:'9px 12px',marginBottom:10}}>
-            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:13}}>Disponible: </span>
-            <span style={{fontFamily:'Cinzel,serif',fontWeight:700,fontSize:18,color:'#e05050'}}>{f2(selP.available_points)}</span>
-            <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12,marginLeft:8}}>→ después: {f2(selP.available_points-5)}</span>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',flexWrap:'wrap',gap:8}}>
+              <div>
+                <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:13}}>Disponible: </span>
+                <span style={{fontFamily:'Cinzel,serif',fontWeight:700,fontSize:18,color:'#e05050'}}>{f2(selP.available_points)}</span>
+                <span style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12,marginLeft:8}}>
+                  ({maxQtyForPlayer} claim{maxQtyForPlayer!==1?'s':''} disponibles)
+                </span>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <span style={{fontFamily:'Rajdhani,sans-serif',color:'#888',fontSize:12}}>Cantidad:</span>
+                <input type="number" min="1" max={maxQtyForPlayer} value={qty}
+                  onChange={e=>setQty(Math.min(maxQtyForPlayer,Math.max(1,parseInt(e.target.value)||1)))}
+                  style={{width:60,background:CARD,border:`1px solid ${G}`,borderRadius:6,padding:'6px 8px',
+                    color:G,fontSize:14,fontFamily:'Cinzel,serif',fontWeight:700,textAlign:'center'}}/>
+                <button onClick={()=>setQty(maxQtyForPlayer)}
+                  style={{fontSize:10,padding:'4px 8px',borderRadius:5,border:`1px solid ${BORDER}`,
+                    background:'transparent',color:'#888',cursor:'pointer',fontFamily:'Rajdhani,sans-serif'}}>
+                  Todos
+                </button>
+              </div>
+            </div>
+            <div style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:12,marginTop:6}}>
+              Descontará: <strong style={{color:'#e05050'}}>{qty*5} pts</strong>
+              → quedará: <strong style={{color:G}}>{f2(selP.available_points - qty*5)}</strong>
+            </div>
             {selP.available_points<5&&<div style={{color:'#e04040',fontSize:12,fontFamily:'Rajdhani,sans-serif',marginTop:4}}>⚠ Puntos insuficientes</div>}
           </div>
         )}
         <Inp label="Notas (opc.)" value={note} onChange={setNote} placeholder="Claim BD..."/>
-        <Btn onClick={handleCreate} disabled={busy||!selPlayer} bg='gold'>{busy?'...':'+ Registrar Claim (-5 pts)'}</Btn>
+        <Btn onClick={handleCreate} disabled={busy||!selPlayer||qty<1} bg='gold'>
+          {busy?'...':`+ Registrar ${qty} Claim${qty!==1?'s':''} (${qty*5} pts)`}
+        </Btn>
       </Card>
 
       {pending.length>0&&(
