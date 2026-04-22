@@ -112,7 +112,28 @@ function RankingTab({showToast,isSuperAdmin}:{showToast:(t:TT)=>void;isSuperAdmi
 
   async function load(){
     setLoading(true)
-    getAdminLeaderboard().then(d=>{setLb(d);setLoading(false)})
+    // Load leaderboard + admin/events players directly (admin_leaderboard view may exclude them)
+    const [lbData, adminData] = await Promise.all([
+      getAdminLeaderboard(),
+      supabase.from('players').select('id,name,total_score,available_pts,chars,owner,class')
+        .in('name',['Administrador','Guild EVENTS']).eq('is_active',true)
+    ])
+    // Merge: convert admin players to LeaderboardEntry format
+    const adminEntries: LeaderboardEntry[] = (adminData.data??[]).map((p:any) => ({
+      id: p.id,
+      name: p.name,
+      owner: p.owner ?? p.name,
+      chars: p.chars ?? '',
+      class: p.class ?? '',
+      total_points: Number(p.total_score ?? 0),
+      available_points: Number(p.available_pts ?? 0),
+      total_claims: 0,
+    }))
+    // Combine — put admin entries that aren't already in lbData
+    const existingNames = new Set(lbData.map((x:LeaderboardEntry)=>x.name))
+    const merged = [...lbData, ...adminEntries.filter(e=>!existingNames.has(e.name))]
+    setLb(merged)
+    setLoading(false)
     supabase.from('fv_rune_points').select('*, players(name)').then(({data:d})=>{
       const map:Record<string,any>={}
       ;(d??[]).forEach((r:any)=>{if(r.players?.name)map[r.players.name]=r})
@@ -1059,13 +1080,21 @@ function SessionHistoryPanel({showToast}:{showToast:(t:TT)=>void}){
                       <div style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555'}}>
                         {s.raw_report&&<span>Reporte: {s.raw_report.slice(0,60)}{s.raw_report.length>60?'...':''}</span>}
                       </div>
-                      <button onClick={()=>handleDelete(s.id,`${s.maze_type} ${s.session_date}`)}
-                        disabled={deleting===s.id}
-                        style={{fontSize:11,padding:'3px 10px',borderRadius:5,
-                          border:'1px solid #e04040',background:'transparent',color:'#e04040',
-                          cursor:'pointer',fontFamily:'Rajdhani,sans-serif'}}>
-                        {deleting===s.id?'...':'🗑 Eliminar'}
-                      </button>
+                      <div style={{display:'flex',gap:6}}>
+                        <a href={`/admin?editSession=${s.id}`}
+                          style={{fontSize:11,padding:'3px 10px',borderRadius:5,
+                            border:`1px solid ${G}`,background:'transparent',color:G,
+                            cursor:'pointer',fontFamily:'Rajdhani,sans-serif',textDecoration:'none'}}>
+                          ✏ Ver/Editar
+                        </a>
+                        <button onClick={()=>handleDelete(s.id,`${s.maze_type} ${s.session_date}`)}
+                          disabled={deleting===s.id}
+                          style={{fontSize:11,padding:'3px 10px',borderRadius:5,
+                            border:'1px solid #e04040',background:'transparent',color:'#e04040',
+                            cursor:'pointer',fontFamily:'Rajdhani,sans-serif'}}>
+                          {deleting===s.id?'...':'🗑 Eliminar'}
+                        </button>
+                      </div>
                     </div>
                     {/* Attendees */}
                     {attendees[s.id]
