@@ -10,29 +10,26 @@ export async function GET() {
     { auth: { persistSession: false } }
   )
 
+  // Fix is_active for Administrador and Guild EVENTS
+  await db.from('players').update({ is_active: true })
+    .in('name', ['Administrador', 'Guild EVENTS'])
+
   const { data: players } = await db.from('players')
-    .select('id, name, total_score, available_pts')
+    .select('id,name,is_active,total_score,available_pts')
     .order('total_score', { ascending: false })
 
-  const { data: sessions } = await db.from('maze_sessions')
-    .select('id, maze_type, session_date, admin_points, event_points')
-    .order('created_at', { ascending: false }).limit(5)
+  const { data: ptsSums } = await db.from('player_points').select('player_id,points')
+  const sums: Record<string,number> = {}
+  for (const r of ptsSums ?? []) sums[r.player_id] = (sums[r.player_id]??0)+Number(r.points)
 
-  const { data: ptsSums } = await db.from('player_points')
-    .select('player_id, points')
-
-  const sums: Record<string, number> = {}
-  for (const r of ptsSums ?? []) {
-    sums[r.player_id] = (sums[r.player_id] ?? 0) + Number(r.points)
-  }
-
-  const result = (players ?? []).map(p => ({
-    name: p.name,
-    total_score_db: Number(p.total_score),
-    available_pts_db: Number(p.available_pts),
-    sum_from_player_points: Number((sums[p.id] ?? 0).toFixed(4)),
-    discrepancy: Number((Number(p.total_score) - (sums[p.id] ?? 0)).toFixed(4))
-  }))
-
-  return NextResponse.json({ players: result, recent_sessions: sessions })
+  return NextResponse.json({
+    message: 'Fixed is_active for Administrador and Guild EVENTS',
+    players: (players??[]).map(p => ({
+      name: p.name,
+      is_active: p.is_active,
+      total_score_db: Number(p.total_score),
+      available_pts_db: Number(p.available_pts),
+      sum_player_points: Number((sums[p.id]??0).toFixed(4)),
+    }))
+  })
 }
