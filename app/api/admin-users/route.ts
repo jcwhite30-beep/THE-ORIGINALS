@@ -38,10 +38,13 @@ export async function GET(){
 // POST — create new admin user
 export async function POST(req: NextRequest){
   const db = getDb()
-  const { username, email, password, role, permissions } = await req.json()
+  const { username, email: rawEmail, password, role, permissions } = await req.json()
 
-  if(!username||!email||!password)
-    return NextResponse.json({ error: 'Faltan campos requeridos' }, { status: 400 })
+  if(!username||!password)
+    return NextResponse.json({ error: 'Faltan username y contraseña' }, { status: 400 })
+
+  // Email is optional — auto-generate if not provided
+  const email = rawEmail?.trim() || `${username.toLowerCase().replace(/\s+/g,'')}@theoriginals.guild`
 
   // 1. Create auth user
   const { data: authData, error: authErr } = await db.auth.admin.createUser({

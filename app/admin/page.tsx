@@ -392,7 +392,7 @@ function JugadoresTab({showToast}:{showToast:(t:TT)=>void}){
                   <div style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:13,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.name}</div>
                   {p.chars&&<div style={{fontFamily:'Rajdhani,sans-serif',fontSize:10,color:'#666',marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.chars}</div>}
                 </div>
-                <Btn onClick={()=>{setEditing(p.id);setEditData({})}} size='sm'>✏ Editar</Btn>
+                <Btn onClick={()=>{setEditing(p.id);setEditData({name:p.name,owner:p.owner??'',chars:p.chars??'',class:p.class??''})}} size='sm'>✏ Editar</Btn>
               </div>
             )}
           </div>
@@ -1863,15 +1863,20 @@ function UsuariosTab({showToast}:{showToast:(t:TT)=>void}){
   }
 
   async function createUser(){
-    if(!newUser.trim()||!newEmail.trim()||!newPass.trim()){
-      showToast({msg:'Completa todos los campos',type:'warn'}); return
+    if(!newUser.trim()||!newPass.trim()){
+      showToast({msg:'Escribe username y contraseña',type:'warn'}); return
+    }
+    if(newPass.length < 6){
+      showToast({msg:'La contraseña debe tener al menos 6 caracteres',type:'warn'}); return
     }
     setCreating(true)
+    // Email is optional — auto-generate internal one if not provided
+    const email = newEmail.trim() || `${newUser.trim().toLowerCase().replace(/\s+/g,'')}@theoriginals.guild`
     try{
       const res = await fetch('/api/admin-users', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({username:newUser.trim(), email:newEmail.trim(), password:newPass, role:newRole, permissions:ROLE_PERMS[newRole]??{}})
+        body: JSON.stringify({username:newUser.trim(), email, password:newPass, role:newRole, permissions:ROLE_PERMS[newRole]??{}})
       })
       if(!res.ok) throw new Error(await res.text())
       showToast({msg:`✓ Usuario "${newUser}" creado`,type:'ok'})
@@ -1892,7 +1897,7 @@ function UsuariosTab({showToast}:{showToast:(t:TT)=>void}){
           :<div>
             <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
               <Inp label="Username (para login)" value={newUser} onChange={setNewUser} placeholder="morgan_admin"/>
-              <Inp label="Email (interno)" value={newEmail} onChange={setNewEmail} placeholder="morgan@guild.com"/>
+              <Inp label="Email (opc.)" value={newEmail} onChange={setNewEmail} placeholder="se auto-genera si no escribes"/>
               <Inp label="Contraseña" value={newPass} onChange={setNewPass} placeholder="mínimo 6 caracteres"/>
               <div>
                 <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>Rol</div>
