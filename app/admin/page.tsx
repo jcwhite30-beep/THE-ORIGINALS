@@ -1021,19 +1021,47 @@ function SessionHistoryPanel({showToast,reloadKey=0}:{showToast:(t:TT)=>void;rel
   }
 
   async function handleDelete(sessionId:string, sessionInfo:string){
-    if(!confirm(`¿Eliminar sesión "${sessionInfo}"?\nEsto NO revierte los puntos ya acreditados.`)) return
+    if(!confirm(`¿Eliminar sesión "${sessionInfo}"?\nSe revertirán los puntos acreditados automáticamente.`)) return
     setDeleting(sessionId)
     try{
+      // 1. Get all point records for this session BEFORE deleting
+      const{data:pts}=await supabase.from('player_points')
+        .select('player_id,points').eq('session_id',sessionId)
+
+      // 2. Reverse points for each player
+      if(pts&&pts.length>0){
+        for(const pt of pts){
+          const{data:p}=await supabase.from('players')
+            .select('total_score,available_pts').eq('id',pt.player_id).single()
+          if(p){
+            await supabase.from('players').update({
+              total_score:   Math.max(0, Number(p.total_score)   - Number(pt.points)),
+              available_pts: Math.max(0, Number(p.available_pts) - Number(pt.points))
+            }).eq('id',pt.player_id)
+          }
+        }
+      }
+
+      // 3. Delete records
       await supabase.from('maze_attendance').delete().eq('session_id',sessionId)
       await supabase.from('player_points').delete().eq('session_id',sessionId)
       await supabase.from('maze_sessions').delete().eq('id',sessionId)
-      // Clear cache and force reload
+
+      // 4. Reverse loot fuera de banco
+      const{data:bank}=await supabase.from('bank_snapshot').select('id,loots_fuera').limit(1).maybeSingle()
+      if(bank){
+        await supabase.from('bank_snapshot').update({
+          loots_fuera: Math.max(0, bank.loots_fuera - 1)
+        }).eq('id',bank.id)
+      }
+
+      // 5. Update UI instantly
       setAttendees({})
       setExpanded(null)
       setSessions(prev => prev.filter(s => s.id !== sessionId))
-      showToast({msg:'Sesión eliminada',type:'ok'})
+      showToast({msg:'✓ Sesión eliminada y puntos revertidos',type:'ok'})
       load()
-    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    }catch(e:any){showToast({msg:'Error al eliminar: '+e.message,type:'err'})}
     finally{setDeleting(null)}
   }
 
@@ -1762,57 +1790,184 @@ function HistoricoTab(){
 // ─── USUARIOS TAB ─────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════
 function UsuariosTab({showToast}:{showToast:(t:TT)=>void}){
-  const [users,setUsers]=useState<any[]>([])
-  const [editId,setEditId]=useState<string|null>(null)
-  const [editPerms,setEditPerms]=useState<Record<string,boolean>>({})
-  const [busy,setBusy]=useState(false)
+  const ROLES = [
+    {key:'superadmin', label:'Super Admin',  desc:'Acceso total, puede gestionar usuarios'},
+    {key:'manager',    label:'Manager',      desc:'Carga reportes, gestiona claims y conciliación'},
+    {key:'reporter',   label:'Reporter',     desc:'Solo puede cargar reportes de maze'},
+    {key:'viewer',     label:'Viewer',       desc:'Solo lectura del ranking y estadísticas'},
+  ]
+
+  const ROLE_PERMS: Record<string, Record<string,boolean>> = {
+    superadmin: {ranking:true,jugadores:true,mazes:true,claims:true,conciliacion:true,stats:true,anuncios:true,historico:true,usuarios:true},
+    manager:    {ranking:true,jugadores:true,mazes:true,claims:true,conciliacion:true,stats:true,anuncios:true,historico:true,usuarios:false},
+    reporter:   {ranking:true,jugadores:false,mazes:true,claims:false,conciliacion:false,stats:false,anuncios:false,historico:false,usuarios:false},
+    viewer:     {ranking:true,jugadores:false,mazes:false,claims:false,conciliacion:false,stats:true,anuncios:false,historico:false,usuarios:false},
+  }
+
+  const [users, setUsers]       = useState<any[]>([])
+  const [editId, setEditId]     = useState<string|null>(null)
+  const [editPerms, setEditPerms] = useState<Record<string,boolean>>({})
+  const [editRole, setEditRole] = useState('manager')
+  const [busy, setBusy]         = useState(false)
+  // New user form
+  const [showNew, setShowNew]   = useState(false)
+  const [newEmail, setNewEmail] = useState('')
+  const [newUser, setNewUser]   = useState('')
+  const [newPass, setNewPass]   = useState('')
+  const [newRole, setNewRole]   = useState('reporter')
+  const [creating, setCreating] = useState(false)
 
   async function load(){
-    const{data}=await supabase.from('admin_profiles').select('*, admin_email_map(email)').order('created_at',{ascending:false})
-    setUsers(data??[])
+    const res = await fetch('/api/admin-users')
+    const data = await res.json()
+    setUsers(Array.isArray(data) ? data : [])
   }
   useEffect(()=>{load()},[])
 
-  async function savePerms(id:string){
+  function startEdit(u:any){
+    setEditId(u.id)
+    setEditRole(u.role??'manager')
+    setEditPerms(u.permissions??ROLE_PERMS[u.role??'manager']??{})
+  }
+
+  function applyRole(role:string){
+    setEditRole(role)
+    setEditPerms(ROLE_PERMS[role]??{})
+  }
+
+  async function saveUser(){
+    if(!editId) return
     setBusy(true)
-    try{await supabase.from('admin_profiles').update({permissions:editPerms}).eq('id',id);showToast({msg:'Permisos actualizados',type:'ok'});setEditId(null);load()}
-    catch(e:any){showToast({msg:'Error',type:'err'})}
+    try{
+      const res = await fetch('/api/admin-users', {
+        method:'PATCH',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({id:editId, role:editRole, permissions:editPerms})
+      })
+      if(!res.ok) throw new Error(await res.text())
+      showToast({msg:'✓ Usuario actualizado',type:'ok'})
+      setEditId(null); load()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
     finally{setBusy(false)}
   }
 
+  async function deleteUser(id:string, username:string){
+    if(!confirm(`¿Eliminar acceso de "${username}"?`)) return
+    setBusy(true)
+    try{
+      const res = await fetch('/api/admin-users?id='+id, {method:'DELETE'})
+      if(!res.ok) throw new Error(await res.text())
+      showToast({msg:'Usuario eliminado',type:'ok'}); load()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    finally{setBusy(false)}
+  }
+
+  async function createUser(){
+    if(!newUser.trim()||!newEmail.trim()||!newPass.trim()){
+      showToast({msg:'Completa todos los campos',type:'warn'}); return
+    }
+    setCreating(true)
+    try{
+      const res = await fetch('/api/admin-users', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({username:newUser.trim(), email:newEmail.trim(), password:newPass, role:newRole, permissions:ROLE_PERMS[newRole]??{}})
+      })
+      if(!res.ok) throw new Error(await res.text())
+      showToast({msg:`✓ Usuario "${newUser}" creado`,type:'ok'})
+      setNewUser('');setNewEmail('');setNewPass('');setNewRole('reporter');setShowNew(false);load()
+    }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+    finally{setCreating(false)}
+  }
+
+  const rolCol: Record<string,string> = {superadmin:'#c9a84c',manager:G,reporter:'#4ab8f0',viewer:'#888'}
+
   return (
-    <div style={{maxWidth:800}}>
-      <Card title="Cómo crear nuevo Admin" color={`${G}30`}>
-        <p style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#aaa',lineHeight:1.8,marginBottom:12}}>Los usuarios entran con <strong style={{color:'#e8e0d0'}}>username</strong> y contraseña — nunca con email.</p>
-        <div style={{background:VOID,border:`1px solid ${BORDER}`,borderRadius:8,padding:'12px 14px',fontFamily:'monospace',fontSize:11,color:G,lineHeight:1.9,overflowX:'auto'}}>
-          {`-- 1. Supabase → Auth → Users → Add user (cualquier email interno)\n-- 2. Copia el UUID\n\nINSERT INTO admin_profiles (id, username, role, permissions)\nVALUES ('UUID','username','manager','{"ranking":true,"jugadores":true,"mazes":true,"claims":true}');\n\nINSERT INTO admin_email_map (user_id, email, username)\nVALUES ('UUID','email@ejemplo.com','username');`}
-        </div>
+    <div style={{maxWidth:820}}>
+
+      {/* Create new user */}
+      <Card title="➕ Crear nuevo usuario admin" color={`${G}20`}>
+        {!showNew
+          ?<Btn onClick={()=>setShowNew(true)} bg='gold'>+ Nuevo usuario</Btn>
+          :<div>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+              <Inp label="Username (para login)" value={newUser} onChange={setNewUser} placeholder="morgan_admin"/>
+              <Inp label="Email (interno)" value={newEmail} onChange={setNewEmail} placeholder="morgan@guild.com"/>
+              <Inp label="Contraseña" value={newPass} onChange={setNewPass} placeholder="mínimo 6 caracteres"/>
+              <div>
+                <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:4}}>Rol</div>
+                <select value={newRole} onChange={e=>setNewRole(e.target.value)}
+                  style={{width:'100%',background:DEEP,border:`1px solid ${BORDER}`,borderRadius:6,padding:'8px 10px',color:'#e8e0d0',fontSize:13,fontFamily:'Rajdhani,sans-serif'}}>
+                  {ROLES.map(r=><option key={r.key} value={r.key}>{r.label} — {r.desc}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <Btn onClick={createUser} disabled={creating} bg='gold'>{creating?'Creando...':'✓ Crear usuario'}</Btn>
+              <Btn onClick={()=>setShowNew(false)} color='#555'>Cancelar</Btn>
+            </div>
+          </div>
+        }
       </Card>
 
-      <Card title={`Admins registrados — ${users.length}`}>
-        {users.map((u,i)=>(
-          <div key={u.id} style={{borderBottom:i<users.length-1?`1px solid #0f0f20`:'none',paddingBottom:14,marginBottom:14}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:8,flexWrap:'wrap',gap:8}}>
-              <div>
-                <span style={{fontFamily:'Cinzel,serif',fontWeight:600,color:'#e8e0d0',fontSize:14}}>{u.username}</span>
-                <span style={{fontFamily:'Cinzel,serif',fontSize:8,padding:'2px 8px',borderRadius:12,border:`1px solid ${u.role==='superadmin'?G:BORDER}`,color:u.role==='superadmin'?G:'#888',marginLeft:8}}>{u.role}</span>
-                {u.admin_email_map?.email&&<span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555',marginLeft:8}}>{u.admin_email_map.email}</span>}
+      {/* User list */}
+      <Card title="👥 Usuarios con acceso admin">
+        {users.length===0
+          ?<p style={{fontFamily:'Rajdhani,sans-serif',color:'#555',fontSize:13}}>No hay usuarios registrados.</p>
+          :users.map(u=>(
+          <div key={u.id} style={{marginBottom:8,border:`1px solid ${editId===u.id?G:BORDER}`,borderRadius:10,overflow:'hidden'}}>
+            {/* User row */}
+            <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',background:DEEP,flexWrap:'wrap'}}>
+              <div style={{flex:1}}>
+                <span style={{fontFamily:'Cinzel,serif',fontWeight:700,color:'#e8e0d0',fontSize:14}}>{u.username}</span>
+                <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:11,color:'#555',marginLeft:8}}>{u.email}</span>
               </div>
+              <span style={{fontFamily:'Cinzel,serif',fontSize:10,fontWeight:700,color:rolCol[u.role]??'#888',
+                textTransform:'uppercase',letterSpacing:'0.08em',padding:'3px 8px',border:`1px solid ${rolCol[u.role]??'#888'}40`,borderRadius:20}}>
+                {u.role}
+              </span>
               <div style={{display:'flex',gap:6}}>
                 {editId===u.id
-                  ?<><Btn onClick={()=>savePerms(u.id)} disabled={busy} size='sm' bg='gold'>{busy?'...':'✓'}</Btn><Btn onClick={()=>setEditId(null)} size='sm'>✕</Btn></>
-                  :<Btn onClick={()=>{setEditId(u.id);setEditPerms(u.permissions??{})}} size='sm'>⚙ Permisos</Btn>
+                  ?<><Btn onClick={saveUser} disabled={busy} bg='gold' size='sm'>💾 Guardar</Btn>
+                    <Btn onClick={()=>setEditId(null)} color='#555' size='sm'>Cancelar</Btn></>
+                  :<><Btn onClick={()=>startEdit(u)} size='sm' color='#888'>✏ Editar</Btn>
+                    {u.role!=='superadmin'&&<Btn onClick={()=>deleteUser(u.id,u.username)} size='sm' color='#e04040'>🗑</Btn>}</>
                 }
               </div>
             </div>
+
+            {/* Edit permissions */}
             {editId===u.id&&(
-              <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:8,paddingLeft:4}}>
-                {ALL_PERMS.map(p=>(
-                  <label key={p.key} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer'}}>
-                    <input type="checkbox" checked={!!editPerms[p.key]} onChange={e=>setEditPerms(d=>({...d,[p.key]:e.target.checked}))}/>
-                    <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:13,color:'#aaa'}}>{p.label}</span>
-                  </label>
-                ))}
+              <div style={{padding:'12px 14px',background:CARD}}>
+                {/* Role selector */}
+                <div style={{marginBottom:10}}>
+                  <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:6}}>Plantilla de rol</div>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    {ROLES.map(r=>(
+                      <button key={r.key} onClick={()=>applyRole(r.key)}
+                        style={{padding:'5px 12px',borderRadius:6,cursor:'pointer',fontFamily:'Rajdhani,sans-serif',fontSize:12,
+                          border:`1px solid ${editRole===r.key?rolCol[r.key]:BORDER}`,
+                          background:editRole===r.key?`${rolCol[r.key]}20`:'transparent',
+                          color:editRole===r.key?rolCol[r.key]:'#666'}}>
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {/* Individual permissions */}
+                <div style={{fontFamily:'Cinzel,serif',fontSize:9,color:'#666',textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:6}}>Permisos individuales</div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
+                  {ALL_PERMS.map(p=>(
+                    <label key={p.key} style={{display:'flex',alignItems:'center',gap:6,cursor:'pointer',
+                      padding:'6px 10px',background:DEEP,borderRadius:6,
+                      border:`1px solid ${editPerms[p.key]?G:BORDER}`}}>
+                      <input type="checkbox" checked={!!editPerms[p.key]}
+                        onChange={e=>setEditPerms(prev=>({...prev,[p.key]:e.target.checked}))}
+                        style={{accentColor:G}}/>
+                      <span style={{fontFamily:'Rajdhani,sans-serif',fontSize:12,color:editPerms[p.key]?G:'#666'}}>{p.label}</span>
+                    </label>
+                  ))}
+                </div>
               </div>
             )}
           </div>
@@ -1821,6 +1976,7 @@ function UsuariosTab({showToast}:{showToast:(t:TT)=>void}){
     </div>
   )
 }
+
 
 // ══════════════════════════════════════════════════════════════
 // ─── MAIN ADMIN PAGE ──────────────────────────────────────────
