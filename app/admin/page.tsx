@@ -163,7 +163,6 @@ function RankingTab({showToast,isSuperAdmin}:{showToast:(t:TT)=>void;isSuperAdmi
       load()
     }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
   }
-  }
 
   const thStyle=(txt:string,align='right')=>({padding:'8px 10px',textAlign:align as any,fontFamily:'Cinzel,serif',fontSize:8,color:'#777',textTransform:'uppercase' as any,letterSpacing:'0.08em',whiteSpace:'nowrap' as any})
   const tdN=(val:string|number,col:string,sz=14)=>(<td style={{padding:'9px 10px',textAlign:'right',fontFamily:'Cinzel,serif',fontWeight:700,color:col,fontSize:sz,whiteSpace:'nowrap'}}>{val}</td>)
