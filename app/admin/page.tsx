@@ -147,12 +147,22 @@ function RankingTab({showToast,isSuperAdmin}:{showToast:(t:TT)=>void;isSuperAdmi
 
   async function savePlayerPts(p:LeaderboardEntry){
     try{
-      await supabase.from('players').update({
-        total_score:parseFloat(editPts.total)||p.total_points,
-        available_pts:parseFloat(editPts.avail)||p.available_points
-      }).eq('id',p.id)
-      showToast({msg:'Puntos actualizados',type:'ok'});setEditing(null);load()
+      const res = await fetch('/api/players', {
+        method:'PATCH',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          id: p.id,
+          total_score: parseFloat(editPts.total) || p.total_points,
+          available_pts: parseFloat(editPts.avail) || p.available_points
+        })
+      })
+      const result = await res.json()
+      if(!res.ok) throw new Error(result.error || 'Error')
+      showToast({msg:'Puntos actualizados',type:'ok'})
+      setEditing(null)
+      load()
     }catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
+  }
   }
 
   const thStyle=(txt:string,align='right')=>({padding:'8px 10px',textAlign:align as any,fontFamily:'Cinzel,serif',fontSize:8,color:'#777',textTransform:'uppercase' as any,letterSpacing:'0.08em',whiteSpace:'nowrap' as any})
@@ -339,7 +349,19 @@ function JugadoresTab({showToast}:{showToast:(t:TT)=>void}){
 
   async function saveEdit(id:string){
     setBusy(true)
-    try{await updatePlayer(id,editData);showToast({msg:'Guardado',type:'ok'});setEditing(null);load()}
+    try{
+      // Use server-side API to bypass RLS
+      const res = await fetch('/api/players', {
+        method:'PATCH',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({id, ...editData})
+      })
+      const result = await res.json()
+      if(!res.ok) throw new Error(result.error || 'Error al guardar')
+      showToast({msg:'✓ Jugador actualizado',type:'ok'})
+      setEditing(null)
+      load()
+    }
     catch(e:any){showToast({msg:'Error: '+e.message,type:'err'})}
     finally{setBusy(false)}
   }
@@ -1024,43 +1046,16 @@ function SessionHistoryPanel({showToast,reloadKey=0}:{showToast:(t:TT)=>void;rel
     if(!confirm(`¿Eliminar sesión "${sessionInfo}"?\nSe revertirán los puntos acreditados automáticamente.`)) return
     setDeleting(sessionId)
     try{
-      // 1. Get all point records for this session BEFORE deleting
-      const{data:pts}=await supabase.from('player_points')
-        .select('player_id,points').eq('session_id',sessionId)
+      // Use server-side API — reverses points and deletes all records
+      const res = await fetch(`/api/sessions?id=${sessionId}`, { method:'DELETE' })
+      const result = await res.json()
+      if(!res.ok) throw new Error(result.error || 'Error al eliminar')
 
-      // 2. Reverse points for each player
-      if(pts&&pts.length>0){
-        for(const pt of pts){
-          const{data:p}=await supabase.from('players')
-            .select('total_score,available_pts').eq('id',pt.player_id).single()
-          if(p){
-            await supabase.from('players').update({
-              total_score:   Math.max(0, Number(p.total_score)   - Number(pt.points)),
-              available_pts: Math.max(0, Number(p.available_pts) - Number(pt.points))
-            }).eq('id',pt.player_id)
-          }
-        }
-      }
-
-      // 3. Delete records
-      await supabase.from('maze_attendance').delete().eq('session_id',sessionId)
-      await supabase.from('player_points').delete().eq('session_id',sessionId)
-      await supabase.from('maze_sessions').delete().eq('id',sessionId)
-
-      // 4. Reverse loot fuera de banco
-      const{data:bank}=await supabase.from('bank_snapshot').select('id,loots_fuera').limit(1).maybeSingle()
-      if(bank){
-        await supabase.from('bank_snapshot').update({
-          loots_fuera: Math.max(0, bank.loots_fuera - 1)
-        }).eq('id',bank.id)
-      }
-
-      // 5. Update UI instantly
+      // Update UI instantly
       setAttendees({})
       setExpanded(null)
       setSessions(prev => prev.filter(s => s.id !== sessionId))
-      showToast({msg:'✓ Sesión eliminada y puntos revertidos',type:'ok'})
-      load()
+      showToast({msg:`✓ Sesión eliminada — ${result.reversed ?? 0} jugadores revertidos`,type:'ok'})
     }catch(e:any){showToast({msg:'Error al eliminar: '+e.message,type:'err'})}
     finally{setDeleting(null)}
   }
